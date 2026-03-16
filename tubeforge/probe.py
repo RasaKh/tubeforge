@@ -73,3 +73,68 @@ def ffprobe_json(path, use_cache=True):
     return data
 
 
+def media_duration(path):
+    try:
+        info = ffprobe_json(path)
+        return float(info.get("format", {}).get("duration") or 0) or None
+    except Exception:
+        return None
+
+
+def summarize_probe(data):
+    """Condense an ffprobe dump into something the UI can render as a table."""
+    fmt = data.get("format", {}) or {}
+    streams = []
+    for s in data.get("streams", []) or []:
+        tags = s.get("tags", {}) or {}
+        disp = s.get("disposition", {}) or {}
+        entry = {
+            "index": s.get("index"),
+            "type": s.get("codec_type"),
+            "codec": s.get("codec_name"),
+            "codec_long": s.get("codec_long_name"),
+            "profile": s.get("profile"),
+            "language": tags.get("language"),
+            "title": tags.get("title"),
+            "bitrate": s.get("bit_rate"),
+            "default": bool(disp.get("default")),
+            "forced": bool(disp.get("forced")),
+        }
+        if s.get("codec_type") == "video":
+            entry.update({
+                "width": s.get("width"), "height": s.get("height"),
+                "fps": s.get("r_frame_rate"), "avg_fps": s.get("avg_frame_rate"),
+                "pix_fmt": s.get("pix_fmt"), "level": s.get("level"),
+                "nb_frames": s.get("nb_frames"),
+                "sar": s.get("sample_aspect_ratio"), "dar": s.get("display_aspect_ratio"),
+                "color_space": s.get("color_space"), "color_primaries": s.get("color_primaries"),
+                "color_transfer": s.get("color_transfer"),
+            })
+        elif s.get("codec_type") == "audio":
+            entry.update({
+                "sample_rate": s.get("sample_rate"), "channels": s.get("channels"),
+                "channel_layout": s.get("channel_layout"), "sample_fmt": s.get("sample_fmt"),
+            })
+        streams.append(entry)
+    chapters = []
+    for c in data.get("chapters", []) or []:
+        chapters.append({
+            "id": c.get("id"),
+            "start": float(c.get("start_time") or 0),
+            "end": float(c.get("end_time") or 0),
+            "title": (c.get("tags") or {}).get("title", ""),
+        })
+    return {
+        "filename": fmt.get("filename"),
+        "format_name": fmt.get("format_name"),
+        "format_long": fmt.get("format_long_name"),
+        "duration": float(fmt.get("duration") or 0) or None,
+        "size": int(fmt.get("size") or 0) or None,
+        "bitrate": fmt.get("bit_rate"),
+        "nb_streams": fmt.get("nb_streams"),
+        "tags": fmt.get("tags", {}),
+        "streams": streams,
+        "chapters": chapters,
+    }
+
+
