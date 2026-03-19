@@ -428,3 +428,188 @@ def preflight_ytdlp(spec):
             "why": "WebM is not among the containers yt-dlp can write cover art into.",
             "fix": "Merge into mkv instead — it holds the same streams and accepts thumbnails.",
             "apply": {"merge_output_format": "mkv"},
+            "apply_label": "Switch to mkv",
+        })
+
+    url_text = spec.get("urls")
+    urls = url_text.splitlines() if isinstance(url_text, str) else (url_text or [])
+    channelish = [u for u in urls if re.search(r"/@[\w.-]+/?$|/(channel|user|c)/|list=", str(u))]
+    if channelish and not (opts.get("playlist_items") or opts.get("max_downloads")
+                           or opts.get("download_archive") or opts.get("playlist_mode") == "--no-playlist"):
+        warnings.append({
+            "level": "warn",
+            "text": "This link points at a channel or playlist, so every video will be downloaded.",
+            "why": "No item range, download limit or archive file is set.",
+            "fix": "Set 'Items' to something like 1:20, or choose an archive file so repeat "
+                   "runs skip what you already have.",
+        })
+
+    return warnings
+
+
+def _append_opt(cmd, opt, value):
+    """Translate one registry entry + value into argv fragments."""
+    t = opt["type"]
+    flag = opt.get("flag", "")
+    prefix = opt.get("prefix", "")
+
+    if t == "bool":
+        if value:
+            if flag:
+                cmd.append(flag)
+        return
+    if value in (None, "", []):
+        return
+    if t == "list":
+        items = value if isinstance(value, list) else str(value).splitlines()
+        for item in items:
+            item = item.strip()
+            if item:
+                cmd += [flag, prefix + item] if flag else [prefix + item]
+        return
+    val = str(value).strip()
+    if not val:
+        return
+    if t == "select" and not flag:
+        # the value *is* the flag (tri-state selects like playlist handling)
+        cmd.append(val)
+        return
+    if flag:
+        cmd += [flag, prefix + val]
+    else:
+        cmd.append(prefix + val)
+
+
+def is_safe_media_url(value):
+    """Allow network media URLs while rejecting local/private literal hosts."""
+    try:
+        parsed = urlsplit(str(value).strip())
+        host = parsed.hostname
+        if parsed.scheme.lower() not in ("http", "https") or not host:
+            return False
+        try:
+            addr = ipaddress.ip_address(host)
+            if not addr.is_global:
+                return False
+        except ValueError:
+            # DNS names are checked again by the deployment's egress policy;
+            # rejecting only literal private addresses avoids breaking normal
+            # public hostnames while closing the common SSRF shortcuts.
+            if host.lower() in ("localhost", "localhost.localdomain"):
+                return False
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def build_ytdlp(spec):
+    """spec = {urls: [...], opts: {id: value}, raw: 'extra args', progress: bool}"""
+    opts = spec.get("opts") or {}
+    urls = spec.get("urls") or []
+    if isinstance(urls, str):
+        urls = [u.strip() for u in urls.splitlines()]
+    urls = [u.strip() for u in urls if u and u.strip() and not u.strip().startswith("#")]
+    invalid = [u for u in urls if not is_safe_media_url(u)]
+    if invalid:
+        raise ValueError("Only http:// and https:// media URLs are allowed.")
+
+    cmd = [CONFIG["ytdlp_bin"]]
+
+    # Structured progress output so the UI can draw real progress bars.
+    if spec.get("progress", True):
+        cmd += ["--newline", "--progress",
+                "--progress-template", "download:" + PROGRESS_TEMPLATE]
+
+    # Explicit format IDs from the Format Explorer win over the text selector.
+    fid = (opts.get("format_id") or "").strip()
+    if fid:
+        opts = dict(opts)
+        opts["format"] = fid
+        opts["format_id"] = ""
+
+    for opt in YTDLP_OPTIONS:
+        if opt["id"] in ("format_id",):
+            continue
+        if opt["id"] in opts:
+            value = opts[opt["id"]]
+            if opt["id"] == "exec_cmd" and value:
+                raise ValueError("Post-download command execution is disabled in the web service.")
+            if opt["type"] == "path" and value:
+                value = resolve_path(value)
+            if opt["id"] in ("output", "output_chapter") and value:
+                literal = re.sub(r"^chapter:", "", str(value))
+                if opt["id"] == "output_chapter":
+                    value = literal
+                resolve_path(os.path.join(resolve_path(opts.get("paths") or dl_dir()), literal))
+            _append_opt(cmd, opt, value)
+
+    # Default landing directory if the user did not set one.
+    if not (opts.get("paths") or "").strip():
+        cmd += ["-P", dl_dir()]
+    if not (opts.get("output") or "").strip():
+        cmd += ["-o", CONFIG.get("default_output_template") or "%(title)s [%(id)s].%(ext)s"]
+
+    # Raw arguments and yt-dlp post-processors can execute commands.  They are
+    # not safe to expose through this HTTP control surface, even though the UI
+    # historically surfaced them as power-user options.
+    if (spec.get("raw") or "").strip():
+        raise ValueError("Raw yt-dlp arguments are disabled in the web service.")
+    if opts.get("exec_cmd"):
+        raise ValueError("Post-download command execution is disabled in the web service.")
+
+    cmd += ["--"] + urls
+    return cmd
+
+
+def ytdlp_metadata(url, flat=False, timeout=180):
+    """Fetch metadata (and the format table) for a URL without downloading."""
+    if not is_safe_media_url(url):
+        raise ValueError("Only http:// and https:// media URLs are allowed.")
+    cmd = [CONFIG["ytdlp_bin"], "-J", "--no-warnings"]
+    if flat:
+        cmd.append("--flat-playlist")
+    cmd += ["--", url]
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if out.returncode != 0 and not out.stdout.strip():
+        raise RuntimeError((out.stderr or "yt-dlp failed").strip()[:4000])
+    return json.loads(out.stdout)
+
+
+def summarize_formats(info):
+    """Flatten yt-dlp's format list into sortable rows for the explorer table."""
+    rows = []
+    for f in info.get("formats", []) or []:
+        size = f.get("filesize") or f.get("filesize_approx")
+        vcodec = f.get("vcodec") or "none"
+        acodec = f.get("acodec") or "none"
+        if vcodec == "none" and acodec == "none":
+            kind = "?"
+        elif vcodec == "none":
+            kind = "audio"
+        elif acodec == "none":
+            kind = "video"
+        else:
+            kind = "both"
+        rows.append({
+            "format_id": f.get("format_id"),
+            "ext": f.get("ext"),
+            "kind": kind,
+            "resolution": f.get("resolution") or (
+                "%sx%s" % (f.get("width"), f.get("height")) if f.get("width") else None),
+            "height": f.get("height") or 0,
+            "width": f.get("width") or 0,
+            "fps": f.get("fps"),
+            "vcodec": vcodec, "acodec": acodec,
+            "vbr": f.get("vbr"), "abr": f.get("abr"), "tbr": f.get("tbr"),
+            "asr": f.get("asr"), "audio_channels": f.get("audio_channels"),
+            "filesize": size, "filesize_h": human_size(size) if size else "~",
+            "protocol": f.get("protocol"), "container": f.get("container"),
+            "dynamic_range": f.get("dynamic_range"),
+            "language": f.get("language"),
+            "format_note": f.get("format_note") or f.get("format"),
+            "quality": f.get("quality"),
+        })
+    rows.sort(key=lambda r: (r["kind"] != "video", -(r["height"] or 0), -(r["tbr"] or 0)))
+    return rows
+
+
