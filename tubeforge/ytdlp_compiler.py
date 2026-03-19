@@ -348,3 +348,83 @@ PROGRESS_TEMPLATE = (
 
 
 FORMAT_PRESETS = [(p[0], p[1], (p[2] if len(p) > 2 else {})) for p in FORMAT_PRESETS]
+
+
+def preflight_ytdlp(spec):
+    """Catch option combinations that yt-dlp will only reject once it is running.
+
+    Each entry explains what will break and what to change, so the message is
+    actionable rather than a rule number."""
+    opts = spec.get("opts") or {}
+    warnings = []
+
+    fmt = str(opts.get("format") or "")
+    audio_only = bool(re.search(r"\bbestaudio\b|\bworstaudio\b", fmt)) and \
+        not re.search(r"\bbestvideo\b|\bworstvideo\b|\+", fmt)
+    extracting = bool(opts.get("extract_audio"))
+
+    if audio_only and not extracting:
+        if opts.get("embed_thumbnail"):
+            warnings.append({
+                "level": "block",
+                "text": "Thumbnail embedding will fail on this download.",
+                "why": "An audio-only format keeps its source container, and YouTube serves "
+                       "Opus inside .webm. yt-dlp can only embed thumbnails into mp3, mkv, "
+                       "ogg/opus/flac and the mp4 family, so it stops before writing anything.",
+                "fix": "Use one of the 'Audio only' chips under Quick format. They switch on "
+                       "extraction, which moves the stream into its matching container "
+                       "(.opus here) without re-encoding.",
+                "apply": {"extract_audio": True},
+                "apply_label": "Switch to audio extraction",
+            })
+        else:
+            warnings.append({
+                "level": "warn",
+                "text": "This will save a .webm file, not an audio file.",
+                "why": "Selecting an audio-only stream does not convert anything. Without "
+                       "'Extract audio only' the raw stream is written as it arrived.",
+                "fix": "Use one of the 'Audio only' chips under Quick format for a correctly "
+                       "named .opus or .m4a file.",
+                "apply": {"extract_audio": True},
+                "apply_label": "Switch to audio extraction",
+            })
+
+    wants_video = bool(re.search(r"\bbestvideo\b|\bworstvideo\b", fmt)) or \
+        bool(re.search(r"height\s*[<>=]", fmt))
+    if extracting and wants_video:
+        warnings.append({
+            "level": "warn",
+            "text": "This selects a video stream but throws the picture away.",
+            "why": "'Extract audio only' discards the video after downloading it, so you wait "
+                   "for the full file and keep only the sound.",
+            "fix": "Pick a video chip under Quick format to keep the picture, or an 'Audio only' "
+                   "chip so nothing extra is downloaded.",
+            "apply": {"extract_audio": False},
+            "apply_label": "Keep the video",
+        })
+
+    if opts.get("audio_format") and not extracting:
+        warnings.append({
+            "level": "warn",
+            "text": "The audio format setting is being ignored.",
+            "why": "--audio-format only applies while extracting audio.",
+            "fix": "Pick an 'Audio only' chip under Quick format, or clear the audio format.",
+            "apply": {"extract_audio": True},
+            "apply_label": "Switch to audio extraction",
+        })
+
+    if extracting and opts.get("embed_subs"):
+        warnings.append({
+            "level": "warn",
+            "text": "Subtitles cannot be embedded into an audio-only file.",
+            "why": "The video stream and its subtitle tracks are discarded during extraction.",
+            "fix": "Use 'Write subtitle files' to keep them as separate .srt files.",
+        })
+
+    if opts.get("embed_thumbnail") and str(opts.get("merge_output_format") or "") == "webm":
+        warnings.append({
+            "level": "block",
+            "text": "Thumbnails cannot be embedded into a .webm file.",
+            "why": "WebM is not among the containers yt-dlp can write cover art into.",
+            "fix": "Merge into mkv instead — it holds the same streams and accepts thumbnails.",
+            "apply": {"merge_output_format": "mkv"},
