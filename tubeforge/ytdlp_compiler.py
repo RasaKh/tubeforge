@@ -218,3 +218,133 @@ YTDLP_OPTIONS = [
     dict(id="source_address", group="network", type="text", flag="--source-address",
          label="Bind source address", adv=True),
     dict(id="force_ipv4", group="network", type="bool", flag="-4", label="Force IPv4", adv=True),
+    dict(id="force_ipv6", group="network", type="bool", flag="-6", label="Force IPv6", adv=True),
+    dict(id="downloader", group="network", type="select", flag="--downloader", label="External downloader",
+         choices=["", "native", "aria2c", "axel", "curl", "wget", "ffmpeg", "httpie"]),
+    dict(id="downloader_args", group="network", type="list", flag="--downloader-args",
+         label="Downloader args", placeholder="aria2c:-x 16 -k 1M", adv=True),
+    dict(id="sleep_interval", group="network", type="number", flag="--sleep-interval",
+         label="Sleep between downloads (s)", adv=True),
+    dict(id="max_sleep_interval", group="network", type="number", flag="--max-sleep-interval",
+         label="Max sleep (s)", adv=True),
+    dict(id="sleep_requests", group="network", type="number", flag="--sleep-requests",
+         label="Sleep between requests (s)", adv=True),
+
+    # ── Authentication ─────────────────────────────────────────────────────
+    dict(id="cookies", group="auth", type="path", flag="--cookies", label="Cookies file",
+         placeholder="cookies.txt (Netscape format)"),
+    dict(id="cookies_from_browser", group="auth", type="text", flag="--cookies-from-browser",
+         label="Cookies from browser", placeholder="firefox  |  chrome:Default  |  brave"),
+    dict(id="username", group="auth", type="text", flag="-u", label="Username"),
+    dict(id="password", group="auth", type="text", flag="-p", label="Password", secret=True),
+    dict(id="twofactor", group="auth", type="text", flag="-2", label="2FA code", secret=True),
+    dict(id="video_password", group="auth", type="text", flag="--video-password",
+         label="Video password", secret=True),
+    dict(id="netrc", group="auth", type="bool", flag="-n", label="Use .netrc", adv=True),
+    dict(id="geo_bypass", group="auth", type="bool", flag="--geo-bypass", label="Geo bypass"),
+    dict(id="geo_bypass_country", group="auth", type="text", flag="--geo-bypass-country",
+         label="Pretend country (ISO 3166-2)", placeholder="TR", adv=True),
+    dict(id="user_agent", group="auth", type="text", flag="--user-agent", label="User agent", adv=True),
+    dict(id="referer", group="auth", type="text", flag="--referer", label="Referer", adv=True),
+    dict(id="headers", group="auth", type="list", flag="--add-headers", label="Extra headers",
+         placeholder="X-Token:abc123", adv=True),
+
+    # ── Filesystem & Behaviour ─────────────────────────────────────────────
+    dict(id="continue_dl", group="fs", type="bool", flag="-c", label="Resume partial downloads"),
+    dict(id="no_part", group="fs", type="bool", flag="--no-part", label="Write directly (no .part files)"),
+    dict(id="no_mtime", group="fs", type="bool", flag="--no-mtime", label="Do not set file mtime"),
+    dict(id="no_cache_dir", group="fs", type="bool", flag="--no-cache-dir", label="Disable cache", adv=True),
+    dict(id="rm_cache_dir", group="fs", type="bool", flag="--rm-cache-dir", label="Wipe cache first", adv=True),
+    dict(id="ignore_errors", group="fs", type="bool", flag="-i", label="Continue past errors"),
+    dict(id="abort_on_error", group="fs", type="bool", flag="--abort-on-error", label="Abort on first error"),
+    dict(id="no_warnings", group="fs", type="bool", flag="--no-warnings", label="Suppress warnings"),
+    dict(id="paths_temp", group="fs", type="path", flag="-P", prefix="temp:", label="Temp directory", adv=True),
+
+    # ── Simulation & Logging ───────────────────────────────────────────────
+    dict(id="simulate", group="verbose", type="bool", flag="-s", label="Simulate (no download)"),
+    dict(id="skip_download", group="verbose", type="bool", flag="--skip-download",
+         label="Skip media, keep sidecars"),
+    dict(id="list_formats", group="verbose", type="bool", flag="-F", label="List formats"),
+    dict(id="list_thumbnails", group="verbose", type="bool", flag="--list-thumbnails", label="List thumbnails"),
+    dict(id="dump_json", group="verbose", type="bool", flag="-j", label="Dump metadata JSON"),
+    dict(id="print_fields", group="verbose", type="list", flag="--print", label="Print fields",
+         placeholder="%(title)s %(duration)s", adv=True),
+    dict(id="verbose_flag", group="verbose", type="bool", flag="-v", label="Verbose output"),
+    dict(id="quiet", group="verbose", type="bool", flag="-q", label="Quiet"),
+
+    # ── Extractor & Raw ────────────────────────────────────────────────────
+    dict(id="extractor_args", group="extractor", type="list", flag="--extractor-args",
+         label="Extractor args", placeholder="youtube:player_client=android,web",
+         help="Site-specific tuning. One per line."),
+    dict(id="extractor_retries", group="extractor", type="text", flag="--extractor-retries",
+         label="Extractor retries", adv=True),
+    dict(id="allow_unplayable", group="extractor", type="bool", flag="--allow-unplayable-formats",
+         label="Allow unplayable (DRM) formats", adv=True),
+    dict(id="mark_watched", group="extractor", type="bool", flag="--mark-watched",
+         label="Mark as watched", adv=True),
+    dict(id="no_check_certificate", group="extractor", type="bool", flag="--no-check-certificates",
+         label="Skip TLS verification", adv=True),
+    dict(id="legacy_server_connect", group="extractor", type="bool", flag="--legacy-server-connect",
+         label="Allow legacy TLS", adv=True),
+]
+
+YTDLP_INDEX = {o["id"]: o for o in YTDLP_OPTIONS}
+
+# Ready-made format expressions offered as one-click chips in the UI.
+# `sets` carries any companion options a preset needs to actually do what its
+# name promises. Selecting an audio-only stream without -x leaves the file in
+# its source container (opus inside .webm), which then breaks thumbnail
+# embedding and confuses every downstream tool.
+FORMAT_PRESETS = [
+    ("Best available (merged)", "bestvideo*+bestaudio/best"),
+    ("Best MP4/H.264 + AAC", "bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]"),
+    ("≤ 2160p", "bestvideo[height<=2160]+bestaudio/best[height<=2160]"),
+    ("≤ 1440p", "bestvideo[height<=1440]+bestaudio/best[height<=1440]"),
+    ("≤ 1080p", "bestvideo[height<=1080]+bestaudio/best[height<=1080]"),
+    ("≤ 1080p60", "bestvideo[height<=1080][fps>=50]+bestaudio/bestvideo[height<=1080]+bestaudio"),
+    ("≤ 720p", "bestvideo[height<=720]+bestaudio/best[height<=720]"),
+    ("≤ 480p", "bestvideo[height<=480]+bestaudio/best[height<=480]"),
+    ("Smallest possible", "worstvideo+worstaudio/worst"),
+    ("Audio only, best", "bestaudio/best", {"extract_audio": True}),
+    ("Audio only, m4a", "bestaudio[ext=m4a]/bestaudio", {"extract_audio": True}),
+    ("AV1 preferred", "bestvideo[vcodec^=av01]+bestaudio/bestvideo+bestaudio"),
+    ("VP9 preferred", "bestvideo[vcodec^=vp9]+bestaudio/bestvideo+bestaudio"),
+    ("No AV1 (compat)", "bestvideo[vcodec!^=av01]+bestaudio/best"),
+    ("Under 500 MB", "best[filesize<500M]/bestvideo[filesize<400M]+bestaudio"),
+]
+
+OUTPUT_TOKENS = [
+    ("title", "Video title"), ("id", "Video ID"), ("ext", "Extension"),
+    ("uploader", "Channel/uploader"), ("channel", "Channel name"),
+    ("upload_date", "YYYYMMDD"), ("duration_string", "H:MM:SS"),
+    ("resolution", "e.g. 1920x1080"), ("fps", "Frames per second"),
+    ("playlist", "Playlist name"), ("playlist_index", "Index in playlist"),
+    ("playlist_autonumber", "Sequential counter"), ("autonumber", "Global counter"),
+    ("view_count", "Views"), ("like_count", "Likes"), ("epoch", "Unix time"),
+    ("format_id", "Chosen format id"), ("vcodec", "Video codec"), ("acodec", "Audio codec"),
+    ("release_date", "Release date"), ("section_title", "Chapter title"),
+    ("section_number", "Chapter number"), ("webpage_url_domain", "Site domain"),
+]
+
+OUTPUT_TEMPLATE_PRESETS = [
+    ("Title + ID", "%(title)s [%(id)s].%(ext)s"),
+    ("Plain title", "%(title)s.%(ext)s"),
+    ("Channel / Title", "%(uploader)s/%(title)s.%(ext)s"),
+    ("Date - Title", "%(upload_date>%Y-%m-%d)s - %(title)s.%(ext)s"),
+    ("Playlist ordered", "%(playlist)s/%(playlist_index)03d - %(title)s.%(ext)s"),
+    ("Archive style", "%(uploader)s/%(upload_date>%Y)s/%(upload_date>%Y-%m-%d)s %(title)s [%(id)s].%(ext)s"),
+    ("Music", "%(artist,uploader)s - %(track,title)s.%(ext)s"),
+    ("Chapters", "chapter:%(title)s/%(section_number)03d %(section_title)s.%(ext)s"),
+]
+
+# Progress template: yt-dlp prints one machine-readable line per tick.
+PROGRESS_SENTINEL = "@@TF@@"
+PROGRESS_TEMPLATE = (
+    PROGRESS_SENTINEL +
+    "%(progress.status)s|%(progress._percent_str)s|%(progress._speed_str)s|"
+    "%(progress._eta_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_estimate_str)s|"
+    "%(info.title)s"
+)
+
+
+FORMAT_PRESETS = [(p[0], p[1], (p[2] if len(p) > 2 else {})) for p in FORMAT_PRESETS]
