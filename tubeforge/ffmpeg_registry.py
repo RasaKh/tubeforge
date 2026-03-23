@@ -393,3 +393,153 @@ VIDEO_ENCODERS = [
          tunes=["", "psnr", "ssim", "grain", "zerolatency", "fastdecode", "animation"],
          profiles=["", "main", "main10", "main12", "main444-8"],
          crf_range=[0, 51], crf_default=26),
+    dict(id="libsvtav1", label="AV1 (SVT-AV1)", family="av1", rc=["crf", "bitrate"],
+         presets=[str(i) for i in range(0, 14)], profiles=["", "main", "high"],
+         crf_range=[0, 63], crf_default=32),
+    dict(id="libaom-av1", label="AV1 (libaom, slow)", family="av1", rc=["crf", "bitrate"],
+         crf_range=[0, 63], crf_default=32),
+    dict(id="librav1e", label="AV1 (rav1e)", family="av1", rc=["qp", "bitrate"],
+         crf_range=[0, 255], crf_default=100),
+    dict(id="libvpx-vp9", label="VP9 (libvpx-vp9)", family="vpx", rc=["crf", "bitrate", "twopass"],
+         crf_range=[0, 63], crf_default=31),
+    dict(id="libvpx", label="VP8 (libvpx)", family="vpx", rc=["crf", "bitrate"],
+         crf_range=[4, 63], crf_default=10),
+    dict(id="mpeg4", label="MPEG-4 Part 2", family="mpeg", rc=["bitrate", "qscale"]),
+    dict(id="libxvid", label="Xvid", family="mpeg", rc=["bitrate", "qscale"]),
+    dict(id="prores_ks", label="ProRes (prores_ks)", family="prores", rc=["qscale"],
+         profiles=["0", "1", "2", "3", "4", "5"]),
+    dict(id="dnxhd", label="DNxHD/DNxHR", family="dnx", rc=["bitrate"],
+         profiles=["", "dnxhr_lb", "dnxhr_sq", "dnxhr_hq", "dnxhr_hqx", "dnxhr_444"]),
+    dict(id="ffv1", label="FFV1 (lossless)", family="lossless", rc=[]),
+    dict(id="libx264rgb", label="H.264 RGB (lossless-ish)", family="x264", rc=["crf"]),
+    dict(id="h264_nvenc", label="H.264 NVENC (NVIDIA)", family="nvenc", rc=["cq", "bitrate"],
+         presets=["p1", "p2", "p3", "p4", "p5", "p6", "p7"],
+         tunes=["", "hq", "ll", "ull", "lossless"], hw=True),
+    dict(id="hevc_nvenc", label="HEVC NVENC (NVIDIA)", family="nvenc", rc=["cq", "bitrate"],
+         presets=["p1", "p2", "p3", "p4", "p5", "p6", "p7"], hw=True),
+    dict(id="av1_nvenc", label="AV1 NVENC (NVIDIA 40xx)", family="nvenc", rc=["cq", "bitrate"], hw=True),
+    dict(id="h264_vaapi", label="H.264 VAAPI (Intel/AMD)", family="vaapi", rc=["qp", "bitrate"], hw=True),
+    dict(id="hevc_vaapi", label="HEVC VAAPI", family="vaapi", rc=["qp", "bitrate"], hw=True),
+    dict(id="av1_vaapi", label="AV1 VAAPI", family="vaapi", rc=["qp", "bitrate"], hw=True),
+    dict(id="h264_qsv", label="H.264 QuickSync", family="qsv", rc=["qscale", "bitrate"], hw=True),
+    dict(id="hevc_qsv", label="HEVC QuickSync", family="qsv", rc=["qscale", "bitrate"], hw=True),
+    dict(id="h264_amf", label="H.264 AMF (AMD)", family="amf", rc=["bitrate"], hw=True),
+    dict(id="gif", label="GIF", family="image", rc=[]),
+    dict(id="libwebp", label="WebP", family="image", rc=["qscale"]),
+    dict(id="png", label="PNG sequence", family="image", rc=[]),
+    dict(id="mjpeg", label="MJPEG", family="image", rc=["qscale"]),
+]
+
+# Each audio encoder declares how quality is actually expressed for it. A single
+# generic -q:a is wrong for most of them: LAME wants 0-9, native AAC wants a
+# fractional VBR scale, libfdk wants -vbr 1-5, Opus and FLAC use a compression
+# level, and PCM has no rate control at all. `arc` lists the modes the UI offers.
+#   bitrate     -> -b:a
+#   quality     -> -q:a  (scale and direction differ per codec, hence q_hint)
+#   vbr         -> -vbr  (libfdk only)
+#   compression -> -compression_level
+#   lossless    -> nothing to set
+AUDIO_ENCODERS = [
+    dict(id="copy", label="Copy (no re-encode)", family="copy", arc=[]),
+
+    dict(id="aac", label="AAC (native)", family="aac",
+         arc=["bitrate", "quality"], abr_default="192k",
+         q_range=[0.1, 2.0], q_step=0.1, q_default=1.4,
+         q_hint="Higher values use more bits and generally improve quality. Quality depends on the material.",
+         bitrates=["64k", "96k", "128k", "160k", "192k", "224k", "256k", "320k"],
+         profiles=["", "aac_low"],
+         sample_fmts=["", "fltp"]),
+
+    dict(id="libfdk_aac", label="AAC (libfdk, if built in)", family="aac",
+         arc=["bitrate", "vbr"], abr_default="192k",
+         vbr_range=[1, 5], vbr_default=4,
+         vbr_hint="1 is roughly 32 kbps per channel, 5 is roughly 96. 4 is a good default.",
+         bitrates=["64k", "96k", "128k", "160k", "192k", "256k", "320k"],
+         profiles=["", "aac_low", "aac_he", "aac_he_v2", "aac_ld", "aac_eld"]),
+
+    dict(id="libmp3lame", label="MP3 (LAME)", family="mp3",
+         arc=["bitrate", "quality"], abr_default="192k",
+         q_range=[0, 9], q_step=1, q_default=2,
+         q_hint="0 is the best quality (about 245 kbps), 9 the worst. V2 (q=2) is the usual choice.",
+         bitrates=["96k", "128k", "160k", "192k", "224k", "256k", "320k"],
+         compression_range=[0, 9], compression_label="Encoding effort",
+         joint_stereo=True),
+
+    dict(id="libopus", label="Opus", family="opus",
+         arc=["bitrate"], abr_default="128k",
+         bitrates=["32k", "48k", "64k", "96k", "128k", "160k", "192k", "256k", "510k"],
+         compression_range=[0, 10], compression_default=10,
+         compression_label="Encoding effort",
+         vbr_modes=["on", "constrained", "off"],
+         applications=["", "audio", "voip", "lowdelay"],
+         frame_durations=["", "2.5", "5", "10", "20", "40", "60"]),
+
+    dict(id="opus", label="Opus (native, experimental)", family="opus",
+         arc=["bitrate"], abr_default="128k",
+         bitrates=["64k", "96k", "128k", "160k", "192k", "256k"]),
+
+    dict(id="libvorbis", label="Vorbis", family="vorbis",
+         arc=["bitrate", "quality"], abr_default="192k",
+         q_range=[-1, 10], q_step=1, q_default=5,
+         q_hint="-1 is the smallest, 10 the largest. 5 is about 160 kbps.",
+         bitrates=["96k", "128k", "160k", "192k", "256k", "320k"]),
+
+    dict(id="flac", label="FLAC (lossless)", family="flac",
+         arc=["compression"],
+         compression_range=[0, 12], compression_default=5,
+         compression_label="Compression level",
+         compression_hint="Higher is a smaller file and a slower encode. The audio is identical either way.",
+         sample_fmts=["", "s16", "s32"]),
+
+    dict(id="alac", label="ALAC (Apple lossless)", family="lossless", arc=[],
+         sample_fmts=["", "s16p", "s32p"]),
+
+    dict(id="pcm_s16le", label="PCM 16-bit WAV", family="pcm", arc=[]),
+    dict(id="pcm_s24le", label="PCM 24-bit WAV", family="pcm", arc=[]),
+    dict(id="pcm_s32le", label="PCM 32-bit WAV", family="pcm", arc=[]),
+    dict(id="pcm_f32le", label="PCM 32-bit float", family="pcm", arc=[]),
+
+    dict(id="ac3", label="AC-3", family="ac3", arc=["bitrate"], abr_default="448k",
+         bitrates=["192k", "224k", "256k", "384k", "448k", "640k"]),
+    dict(id="eac3", label="E-AC-3", family="ac3", arc=["bitrate"], abr_default="384k",
+         bitrates=["128k", "192k", "256k", "384k", "640k", "1024k"]),
+    dict(id="truehd", label="TrueHD (lossless)", family="lossless", arc=[]),
+
+    dict(id="libmp3lame_vbr", label="MP3 (LAME, VBR preset)", family="mp3", hidden=True, arc=[]),
+]
+
+
+for _encoder in AUDIO_ENCODERS:
+    if _encoder["id"] == "libopus":
+        _encoder["sample_rates"] = ["8000", "12000", "16000", "24000", "48000"]
+    elif _encoder["id"] == "opus":
+        _encoder["sample_rates"] = ["48000"]
+
+CHANNEL_LAYOUTS = ["", "mono", "stereo", "2.1", "quad", "5.0", "5.1", "6.1", "7.1"]
+SAMPLE_RATES = ["", "8000", "11025", "12000", "16000", "22050", "24000", "32000", "44100", "48000", "64000", "88200", "96000", "192000"]
+
+CONTAINERS = ["mp4", "mkv", "mov", "webm", "avi", "flv", "ts", "m4a", "mp3", "flac",
+              "wav", "aiff", "opus", "ogg", "aac", "ac3", "eac3", "thd", "m4v", "gif", "webp", "png", "jpg", "srt", "ass", "vtt", "3gp", "wmv", "mxf"]
+
+SUBTITLE_CODECS = ["copy", "mov_text", "srt", "ass", "webvtt", "dvdsub"]
+
+HWACCELS = ["", "auto", "cuda", "vaapi", "qsv", "vdpau", "videotoolbox", "dxva2", "d3d11va", "opencl"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  FFMPEG OPERATION REGISTRY
+#  Each operation declares its own extra fields; the UI renders them and the
+#  compiler below turns everything into one or more ffmpeg invocations
+#  ("stages", which is how two-pass encodes and palette-based GIFs work).
+# ═══════════════════════════════════════════════════════════════════════════
+
+FF_OPS = [
+    # ── Inspect ────────────────────────────────────────────────────────────
+    dict(id="probe", label="Inspect / probe", group="Inspect", inputs=1, enc=False, filters=False,
+         out=False, help="Full ffprobe dump: streams, chapters, tags, bitrates."),
+    dict(id="silencedetect", label="Detect silence", group="Inspect", inputs=1, enc=False, filters=False,
+         out=False, help="Report silent ranges — useful before auto-trimming.",
+         fields=[P("noise", "Noise floor", default="-40dB"),
+                 P("d", "Minimum duration (s)", "number", default="1", step="0.1")]),
+    dict(id="blackdetect", label="Detect black frames", group="Inspect", inputs=1, enc=False,
+         filters=False, out=False,
