@@ -308,3 +308,88 @@ def _esc_filter_value(v):
         v = "".join("\\" + c if c in chars else c for c in v)
     return v
 
+
+def _validate_filter_file(spec_id, param_id, raw):
+    """Resolve and sandbox filter file paths before escaping into filtergraph."""
+    if spec_id == "drawtext" and param_id == "fontfile":
+        real = os.path.realpath(os.path.expanduser(raw))
+        if (real == "/usr/share/fonts" or real.startswith("/usr/share/fonts" + os.sep)) and os.path.isfile(real):
+            return real
+        return resolve_path(raw, must_exist=True)
+    if (spec_id == "lut3d" and param_id == "file") or (spec_id == "subtitles" and param_id == "filename"):
+        return resolve_path(raw, must_exist=True)
+    return raw
+
+
+def compile_filter(entry):
+    """entry = {id: 'scale', params: {...}, enabled: bool} -> 'scale=-2:720'"""
+    spec = FILTER_INDEX.get(entry.get("id"))
+    if not spec:
+        return None
+    vals = entry.get("params") or {}
+    positional, named = [], []
+    allow_pos = True
+    for p in spec["params"]:
+        raw = vals.get(p["id"], p.get("default", ""))
+        if raw is None:
+            raw = ""
+        raw = str(raw).strip()
+        if raw == "":
+            if p.get("pos"):
+                allow_pos = False
+            continue
+        if str(raw) == str(p.get("default", "")) and not p.get("pos") and entry.get("lean"):
+            continue
+        raw = _validate_filter_file(spec["id"], p["id"], raw)
+        val = _esc_filter_value(raw)
+        if spec["id"] == "pan":
+            positional.append(val)
+        else:
+            allow_pos = False
+            arg = "sample_rate" if spec["id"] == "aresample" and p["id"] == "rate" else p["arg"]
+            named.append("%s=%s" % (arg, val))
+    if spec["id"] == "drawtext":
+        named.append("expansion=none")
+    parts = positional + named
+    return spec["id"] + ("=" + ":".join(parts) if parts else "")
+
+
+def compile_filterchain(entries, kind=None):
+    out = []
+    for e in entries or []:
+        if e.get("enabled") is False:
+            continue
+        spec = FILTER_INDEX.get(e.get("id"))
+        if not spec:
+            continue
+        if kind and spec["kind"] != kind:
+            continue
+        s = compile_filter(e)
+        if s:
+            out.append(s)
+    return ",".join(out)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ENCODER MATRIX
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Encoders whose two-pass mode is a real average-bitrate pass. Hardware
+# encoders either lack it or spell it differently, so the option is refused
+# rather than silently producing a single-pass encode.
+TWOPASS_FAMILIES = {"x264", "x265", "vpx", "mpeg"}
+
+VIDEO_ENCODERS = [
+    dict(id="copy", label="Copy (no re-encode)", family="copy"),
+    dict(id="libx264", label="H.264 (libx264)", family="x264", rc=["crf", "bitrate", "twopass"],
+         presets=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow",
+                  "slower", "veryslow", "placebo"],
+         tunes=["", "film", "animation", "grain", "stillimage", "fastdecode", "zerolatency"],
+         profiles=["", "baseline", "main", "high", "high10", "high422", "high444"],
+         crf_range=[0, 51], crf_default=21),
+    dict(id="libx265", label="H.265 / HEVC (libx265)", family="x265", rc=["crf", "bitrate", "twopass"],
+         presets=["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow",
+                  "slower", "veryslow", "placebo"],
+         tunes=["", "psnr", "ssim", "grain", "zerolatency", "fastdecode", "animation"],
+         profiles=["", "main", "main10", "main12", "main444-8"],
+         crf_range=[0, 51], crf_default=26),
