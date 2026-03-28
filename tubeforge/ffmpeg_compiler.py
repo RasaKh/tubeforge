@@ -343,3 +343,288 @@ LAYOUT_CHANNELS = {"mono": 1, "stereo": 2, "2.1": 3, "quad": 4, "5.0": 5, "5.1":
 _encoder_caps_cache = {}
 _encoder_caps_lock = threading.Lock()
 
+
+def encoder_capabilities(codec):
+    """Discover sample constraints from the actual installed FFmpeg build."""
+    if not codec or codec == "copy":
+        return {}
+    key = (CONFIG["ffmpeg_bin"], codec)
+    with _encoder_caps_lock:
+        if key in _encoder_caps_cache:
+            return _encoder_caps_cache[key]
+    caps = {}
+    try:
+        p = subprocess.run([key[0], "-hide_banner", "-h", "encoder=" + codec],
+                           capture_output=True, text=True, timeout=8)
+        output = p.stdout + p.stderr
+        caps["available"] = bool(re.search(r"^Encoder " + re.escape(codec) + r"\s", output, re.M))
+        for field, phrase in (("sample_rates", "sample rates"), ("sample_fmts", "sample formats"),
+                              ("channel_layouts", "channel layouts"), ("pixel_formats", "pixel formats")):
+            match = re.search(r"Supported " + phrase + r": ([^\n]+)", output)
+            if match:
+                caps[field] = match.group(1).split()
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # Offline command previews can still use the declared constraints.
+    if codec in ("libopus", "opus"):
+        caps.setdefault("sample_rates", ["8000", "12000", "16000", "24000", "48000"] if codec == "libopus" else ["48000"])
+    with _encoder_caps_lock:
+        _encoder_caps_cache[key] = caps
+    return caps
+
+
+def normalize_encoder(enc, notes):
+    enc = {k: v for k, v in (enc or {}).items() if v not in (None, "")}
+    if enc.get("acodec") == "libmp3lame_vbr":
+        enc.update(acodec="libmp3lame", arc_mode="quality")
+    for kind, table in (("v", VIDEO_ENCODERS), ("a", AUDIO_ENCODERS)):
+        codec = enc.get(kind + "codec")
+        if not codec or codec == "copy":
+            continue
+        declaration = _enc_index(codec, table)
+        if declaration is None:
+            raise ValueError("Unknown encoder: %s. Use Raw for custom encoders." % codec)
+        caps = encoder_capabilities(codec)
+        if caps.get("available") is False:
+            raise ValueError("%s is not available in the configured FFmpeg build." % codec)
+        if kind == "v":
+            modes = [x for x in declaration.get("rc", []) if x != "twopass"]
+            if modes:
+                if enc.get("rc_mode") not in modes:
+                    enc["rc_mode"] = modes[0]
+                if "crf_default" in declaration and enc["rc_mode"] != "bitrate":
+                    enc.setdefault("crf", declaration["crf_default"])
+                if enc["rc_mode"] == "bitrate" and not enc.get("vbitrate"):
+                    raise ValueError("Set a target video bitrate for bitrate mode.")
+            elif enc.get("crf") is not None:
+                enc.pop("crf", None)
+            if enc.get("crf") is not None and declaration.get("crf_range"):
+                q = _n(enc["crf"])
+                lo, hi = declaration["crf_range"]
+                if q is None or not lo <= q <= hi:
+                    raise ValueError("%s quality must be between %s and %s." % (codec, lo, hi))
+            for field, choices in (("preset", declaration.get("presets")), ("tune", declaration.get("tunes")),
+                                   ("profile", declaration.get("profiles")), ("pix_fmt", caps.get("pixel_formats"))):
+                if enc.get(field) and choices and str(enc[field]) not in choices:
+                    raise ValueError("%s does not support %s=%s." % (codec, field, enc[field]))
+        else:
+            modes = declaration.get("arc") or []
+            if modes:
+                if enc.get("arc_mode") not in modes:
+                    enc["arc_mode"] = modes[0]
+                mode = enc["arc_mode"]
+                field, default = {"bitrate": ("abitrate", "abr_default"), "quality": ("aq", "q_default"),
+                                  "vbr": ("avbr", "vbr_default"), "compression": ("acompression", "compression_default")}[mode]
+                if default in declaration:
+                    enc.setdefault(field, declaration[default])
+            if "compression_default" in declaration:
+                enc.setdefault("acompression", declaration["compression_default"])
+            if codec in ("libopus", "opus"):
+                enc.setdefault("ar", "48000")
+            rates = caps.get("sample_rates") or []
+            if enc.get("ar") and rates and str(enc["ar"]) not in rates:
+                wanted = _n(enc["ar"])
+                if wanted is None or wanted <= 0:
+                    raise ValueError("Sample rate must be a positive number.")
+                rate = "48000" if codec in ("libopus", "opus") else min(rates, key=lambda x: abs(float(x) - wanted))
+                notes.append("%s cannot encode at %s Hz; resampling to %s Hz." % (codec, enc["ar"], rate))
+                enc["ar"] = rate
+            for field, choices in (("asample_fmt", caps.get("sample_fmts")), ("aprofile", declaration.get("profiles")),
+                                   ("aapplication", declaration.get("applications")), ("aframe_duration", declaration.get("frame_durations"))):
+                if enc.get(field) and choices and str(enc[field]) not in choices:
+                    raise ValueError("%s does not support %s=%s." % (codec, field, enc[field]))
+            for field, bounds in (("aq", declaration.get("q_range")), ("avbr", declaration.get("vbr_range")),
+                                  ("acompression", declaration.get("compression_range"))):
+                if enc.get(field) is not None and bounds:
+                    value = _n(enc[field])
+                    if value is None or not bounds[0] <= value <= bounds[1]:
+                        raise ValueError("%s must be between %s and %s." % (field, *bounds))
+            if enc.get("achannel_layout"):
+                count = LAYOUT_CHANNELS.get(enc["achannel_layout"])
+                if count and enc.get("ac") and str(count) != str(enc["ac"]):
+                    raise ValueError("Channel count and channel layout disagree.")
+                supported = caps.get("channel_layouts")
+                if supported and enc["achannel_layout"] not in supported:
+                    raise ValueError("This encoder does not support that channel layout.")
+            if codec in ("libmp3lame", "opus") and int(enc.get("ac") or LAYOUT_CHANNELS.get(enc.get("achannel_layout"), 2)) > 2:
+                raise ValueError("%s supports mono/stereo; choose a channel downmix explicitly." % codec)
+    for field in ("vbitrate", "abitrate", "maxrate", "bufsize"):
+        if enc.get(field) and not re.fullmatch(r"\d+(?:\.\d+)?[kKmMgG]?", str(enc[field])):
+            raise ValueError("%s must be a bitrate such as 128k or 5M." % field)
+    return enc
+
+
+def normalize_media_spec(original):
+    """One settings/output policy shared by preview, jobs, batch and pipelines."""
+    spec = dict(original)
+    op = spec.get("op") or "transcode"
+    meta = FF_OPS_INDEX.get(op, {})
+    notes, choices = [], None
+    params = {p["id"]: p.get("default", "") for p in meta.get("fields", [])}
+    params.update(spec.get("params") or {})
+    spec["params"] = params
+    enc = dict(spec.get("enc") or {})
+    inputs = spec.get("inputs") or []
+    if not isinstance(inputs, list):
+        raise ValueError("Inputs must be a list of file paths.")
+    source = inputs[0] if inputs else ""
+    info = {}
+    if source and op not in ("freeform", "images_to_video"):
+        path = resolve_path(source, must_exist=not spec.get("allow_missing_inputs"))
+        if path and os.path.isfile(path):
+            info = ffprobe_json(path)
+    streams = info.get("streams") or []
+    videos = [s for s in streams if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")]
+    audios = [s for s in streams if s.get("codec_type") == "audio"]
+    audio_only = op in AUDIO_OPS or (bool(streams) and not videos and op in {"transcode", "trim", "loudnorm2"})
+    src_ext = os.path.splitext(source)[1].lstrip(".").lower()
+    output = str(spec.get("output") or "").strip()
+    ext = os.path.splitext(output)[1].lstrip(".").lower()
+    if not ext:
+        ext = src_ext if op in CONTAINER_PRESERVING else meta.get("out_hint", "mp4")
+    video_filters = bool(_vf(spec)) or op in VIDEO_FILTER_OPS or (op == "concat" and params.get("mode") == "filter") or (op == "add_subs" and params.get("mode") == "burn")
+    audio_filters = bool(_af(spec)) or op in AUDIO_FILTER_OPS or (op == "reverse" and _b(params.get("audio"))) or (op == "concat" and params.get("mode") == "filter") or (op in ("pip", "stack") and params.get("audio") == "mix")
+    if op == "trim" and _b((spec.get("seek") or {}).get("accurate")):
+        video_filters = not audio_only
+        audio_filters = audio_only
+    if op not in ("custom", "freeform"):
+        if not meta.get("enc") and not (op == "add_subs" and params.get("mode") == "burn"):
+            enc = {}
+        if audio_only:
+            enc.pop("vcodec", None)
+            enc.pop("twopass", None)
+            default_audio = "copy" if op == "extract_audio" else AUDIO_EXT_ENCODER.get(ext, "aac")
+            enc = with_defaults(enc, acodec=default_audio)
+        elif meta.get("enc"):
+            enc = with_defaults(enc, vcodec="libvpx-vp9" if ext == "webm" else "libx264",
+                                acodec="libopus" if ext == "webm" else "aac")
+        if op == "map_streams":
+            enc = with_defaults(spec.get("enc"), vcodec="copy", acodec="copy", scodec="copy")
+        if op == "trim" and not video_filters and not audio_filters:
+            enc = {"vcodec": "copy", "acodec": "copy"}
+        if op == "loop_clip":
+            enc = {"vcodec": "copy", "acodec": "copy"}
+        for kind, needed, default in (("v", video_filters, "libvpx-vp9" if ext == "webm" else "libx264"),
+                                      ("a", audio_filters, AUDIO_EXT_ENCODER.get(ext, "aac") if audio_only else ("libopus" if ext == "webm" else "aac"))):
+            if needed and enc.get(kind + "codec") == "copy":
+                raise ValueError("This operation filters %s; stream copy is not possible. Select an encoder." % ("video" if kind == "v" else "audio"))
+            if needed:
+                enc = with_defaults(enc, **{kind + "codec": default})
+        if op == "loudnorm2" and not audio_only:
+            enc["vcodec"] = "copy"
+        enc = normalize_encoder(enc, notes)
+    if _b(enc.get("twopass")):
+        family = (_enc_index(enc.get("vcodec"), VIDEO_ENCODERS) or {}).get("family")
+        if op != "transcode" or family not in TWOPASS_FAMILIES or not enc.get("vbitrate"):
+            raise ValueError("Two-pass is available for software Transcode with a target video bitrate.")
+        if len(inputs) > 1 or spec.get("maps"):
+            raise ValueError("Two-pass currently accepts one input and automatic stream selection.")
+    for key in ("ss", "to", "t"):
+        value = (spec.get("seek") or {}).get(key)
+        if op in SEEK_OPS and value not in (None, "") and parse_time_to_seconds(value) is None:
+            raise ValueError("Invalid %s time: %s" % (key, value))
+    if op in DIRECTORY_OPS:
+        if not output:
+            stem = os.path.splitext(os.path.basename(source))[0] or "output"
+            output = os.path.join(os.path.dirname(source), "%s [%s]" % (stem, op.replace("_", " ")))
+    elif meta.get("out") is not False and op not in ("custom", "freeform"):
+        choices = None
+        if op in ("gif", "webp"):
+            choices = [op]
+        elif op in ("screenshot", "thumbnails", "waveform", "spectrogram"):
+            choices = ["png", "jpg", "webp"]
+        elif op == "extract_subs":
+            choices = ["srt", "ass", "vtt"]
+        elif audio_only:
+            codec = enc.get("acodec")
+            if codec == "copy" and audios:
+                index = int(params.get("index") or 0)
+                if index < 0 or index >= len(audios):
+                    raise ValueError("Audio track index is outside this file's audio tracks.")
+                codec = AUDIO_CODEC_NAMES.get(audios[index].get("codec_name"), audios[index].get("codec_name"))
+            choices = AUDIO_CONTAINER_OK.get(codec)
+        else:
+            codec = enc.get("vcodec")
+            copy_mode = op in {"remux", "extract_video", "strip", "metadata", "mux", "loop_clip", "add_audio"} or (op == "trim" and not video_filters and not audio_filters) or (op == "concat" and params.get("mode") != "filter") or (op == "add_subs" and params.get("mode") != "burn")
+            if copy_mode or codec == "copy":
+                codec = videos[0].get("codec_name") if videos else None
+            codec = VIDEO_CODEC_NAMES.get(codec, codec)
+            if codec and codec.endswith(("_nvenc", "_qsv", "_vaapi", "_amf")):
+                codec = codec.split("_")[0]
+            choices = VIDEO_CONTAINER_OK.get(codec)
+            ac = enc.get("acodec")
+            if copy_mode or ac == "copy":
+                ac = audios[0].get("codec_name") if audios else None
+            ac = AUDIO_CODEC_NAMES.get(ac, ac)
+            audio_choices = AUDIO_CONTAINER_OK.get(ac)
+            # Stream-removal operations must not constrain the removed type.
+            if choices and audio_choices and op != "extract_video" and not (op == "strip" and _b(params.get("audio"))):
+                choices = [c for c in choices if c in audio_choices]
+            if op == "add_subs" and params.get("mode") != "burn" and choices:
+                choices = [c for c in choices if c in ("mkv", "mp4", "mov", "m4v")]
+            if copy_mode and choices and op in {"remux", "strip", "metadata", "loop_clip", "concat", "mux"}:
+                for stream in streams:
+                    kind, code = stream.get("codec_type"), stream.get("codec_name")
+                    if op == "strip" and _b(params.get({"subtitle": "subs"}.get(kind, kind))):
+                        continue
+                    compatible = None
+                    if kind == "audio":
+                        compatible = AUDIO_CONTAINER_OK.get(AUDIO_CODEC_NAMES.get(code, code))
+                    elif kind == "video" and not (stream.get("disposition") or {}).get("attached_pic"):
+                        compatible = VIDEO_CONTAINER_OK.get(code)
+                    elif kind == "subtitle":
+                        compatible = ["mp4", "mov", "m4v"] if code == "mov_text" else (["mkv", "webm"] if code == "webvtt" else ["mkv"])
+                    elif kind == "attachment":
+                        compatible = ["mkv"]
+                    if compatible:
+                        choices = [c for c in choices if c in compatible]
+                if not choices:
+                    raise ValueError("These copied streams have no common supported container. Remove or convert incompatible tracks first.")
+        if choices:
+            out_mode = spec.get("output_mode", "manual" if output else "auto")
+            if out_mode == "auto" and (audio_only or ext not in choices):
+                ext = choices[0]
+            elif ext not in choices:
+                old_ext = ext
+                ext = choices[0]
+                if out_mode == "manual":
+                    notes.append(".%s is incompatible with these streams; using .%s." % (old_ext or "(none)", ext))
+        if not output or spec.get("output_mode") == "auto":
+            stem = os.path.splitext(os.path.basename(source))[0] or "output"
+            tag = OUTPUT_TAGS.get(op, op.replace("_", " "))
+            output = os.path.join(os.path.dirname(source), "%s [%s].%s" % (stem, tag, ext))
+        else:
+            output = os.path.splitext(output)[0] + "." + ext
+        target = resolve_path(output)
+        if any(target == resolve_path(i) for i in inputs if i):
+            raise ValueError("Output must differ from every input file.")
+    if op == "transcode" and not spec.get("maps") and (len(audios) > 1 or len(videos) > 1):
+        notes.append("Automatic stream selection keeps primary tracks. Use the mapping editor to select additional tracks.")
+    spec.update(enc=enc, output=output, _audio_only=audio_only, _containers=choices or [])
+    return spec, notes
+
+
+def fix_audio_container(path, codec, notes):
+    """Swap the output extension when the chosen codec cannot live in it."""
+    if not codec or codec == "copy":
+        return path
+    allowed = AUDIO_CONTAINER_OK.get(codec)
+    if not allowed:
+        return path
+    ext = os.path.splitext(path)[1].lower().lstrip(".")
+    if ext in allowed:
+        return path
+    fixed = os.path.splitext(path)[0] + "." + allowed[0]
+    notes.append("%s cannot be stored in a .%s file, so the output is now .%s. "
+                 "Pick a different codec if you wanted that container."
+                 % (codec, ext or "(none)", allowed[0]))
+    return fixed
+
+
+POSITIONS = {
+    "top-left": ("{m}", "{m}"),
+    "top-right": ("W-w-{m}", "{m}"),
+    "bottom-left": ("{m}", "H-h-{m}"),
+    "bottom-right": ("W-w-{m}", "H-h-{m}"),
+    "center": ("(W-w)/2", "(H-h)/2"),
+}
+
