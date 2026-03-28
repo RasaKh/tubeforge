@@ -628,3 +628,453 @@ POSITIONS = {
     "center": ("(W-w)/2", "(H-h)/2"),
 }
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  THE COMPILER
+# ═══════════════════════════════════════════════════════════════════════════
+
+def stream_kinds(path):
+    """Which stream types a file contains. Filtergraphs that reference [0:a] on
+    a silent video fail with an opaque ffmpeg error, so operations check first."""
+    try:
+        info = summarize_probe(ffprobe_json(path))
+    except Exception:
+        return {"video": True, "audio": True, "unknown": True}
+    kinds = set(s["type"] for s in info["streams"])
+    if not any(s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")
+               for s in ffprobe_json(path).get("streams", [])):
+        kinds.discard("video")
+    return {"video": "video" in kinds, "audio": "audio" in kinds, "unknown": False}
+
+
+def preflight_ffmpeg(spec):
+    """Combinations ffmpeg rejects at runtime, caught before anything starts.
+    Each one names what will break and how to fix it."""
+    warnings = []
+    enc = spec.get("enc") or {}
+    op = spec.get("op") or ""
+    meta = FF_OPS_INDEX.get(op, {})
+
+    vf = compile_filterchain(spec.get("vfilters"), "video")
+    af = compile_filterchain(spec.get("afilters"), "audio")
+
+    if meta.get("filters"):
+        if vf and (enc.get("vcodec") or "") == "copy":
+            warnings.append({
+                "level": "block",
+                "text": "Video filters cannot run while copying the video stream.",
+                "why": "Copying passes the encoded stream through untouched, so there is "
+                       "nothing for a filter to modify. ffmpeg refuses the combination.",
+                "fix": "Pick a real video encoder such as H.264, or clear the video filter chain.",
+                "apply": {"vcodec": "libx264"},
+                "apply_label": "Switch to H.264",
+            })
+        if af and (enc.get("acodec") or "") == "copy":
+            warnings.append({
+                "level": "block",
+                "text": "Audio filters cannot run while copying the audio stream.",
+                "why": "The audio is passed through as-is, so a filter has nothing to act on.",
+                "fix": "Pick a real audio encoder such as AAC, or clear the audio filter chain.",
+                "apply": {"acodec": "aac"},
+                "apply_label": "Switch to AAC",
+            })
+
+    if _b(enc.get("twopass")):
+        if not enc.get("vbitrate"):
+            warnings.append({
+                "level": "block",
+                "text": "Two-pass encoding needs a target bitrate.",
+                "why": "The point of the second pass is to hit an average bitrate exactly. "
+                       "Without one there is nothing to aim at.",
+                "fix": "Set a target bitrate, or turn two-pass off and use quality instead.",
+                "apply": {"twopass": ""},
+                "apply_label": "Turn off two-pass",
+            })
+        else:
+            spec_enc = _enc_index(enc.get("vcodec") or "", VIDEO_ENCODERS) or {}
+            if spec_enc and spec_enc.get("family") not in TWOPASS_FAMILIES:
+                warnings.append({
+                    "level": "warn",
+                    "text": "%s does not support two-pass encoding." % spec_enc.get("label", "This encoder"),
+                    "why": "Hardware encoders manage their own rate control; the pass flags are ignored.",
+                    "fix": "Use a software encoder such as H.264 or H.265 for two-pass, or "
+                           "turn it off and set a bitrate directly.",
+                })
+            if enc.get("crf") not in (None, ""):
+                warnings.append({
+                    "level": "warn",
+                    "text": "The quality setting is ignored during a two-pass encode.",
+                    "why": "Two-pass aims at the target bitrate instead.",
+                    "fix": "Nothing to do — the bitrate is what will be used.",
+                })
+
+    if op == "trim" and (spec.get("vfilters") or spec.get("afilters")) \
+            and not _b((spec.get("seek") or {}).get("accurate")):
+        warnings.append({
+            "level": "warn",
+            "text": "Filters force a re-encode, so the fast cut is not being used.",
+            "why": "Copying and filtering cannot be combined.",
+            "fix": "This is fine — just expect it to take as long as an encode.",
+        })
+
+    return warnings
+
+
+def build_ffmpeg(spec):
+    """Returns {'stages': [{'label','argv'}], 'notes': [...], 'outputs': [...]}"""
+    spec, normalization_notes = normalize_media_spec(spec)
+    op = spec.get("op") or "transcode"
+    meta = FF_OPS_INDEX.get(op)
+    if not meta:
+        raise ValueError("Unknown operation: %s" % op)
+
+    # Pipeline steps after the first read a file that does not exist yet at
+    # compile time, so existence checking is skipped for them.
+    _must = (op not in ("images_to_video", "freeform")) and not spec.get("allow_missing_inputs")
+    inputs = [resolve_path(i, must_exist=_must)
+              for i in (spec.get("inputs") or []) if str(i).strip()]
+    params = spec.get("params") or {}
+    enc = spec.get("enc") or {}
+    notes, stages, outputs, cleanup = list(normalization_notes), [], [], []
+
+    ffprobe = CONFIG["ffprobe_bin"]
+
+    def need(n=1):
+        if len(inputs) < n:
+            raise ValueError("This operation needs %d input file(s)." % n)
+
+    # ── Inspect ────────────────────────────────────────────────────────────
+    if op == "probe":
+        need(1)
+        return {"stages": [_stage("ffprobe", [ffprobe, "-v", "quiet", "-print_format", "json",
+                                              "-show_format", "-show_streams", "-show_chapters",
+                                              inputs[0]])],
+                "notes": ["Structured output is also rendered in the Inspector tab."],
+                "outputs": []}
+
+    if op in ("silencedetect", "blackdetect", "scenedetect"):
+        need(1)
+        if op == "silencedetect":
+            f = "silencedetect=noise=%s:d=%s" % (params.get("noise", "-40dB"), params.get("d", "1"))
+            av = ["-af", f]
+        elif op == "blackdetect":
+            f = "blackdetect=d=%s:pic_th=%s" % (params.get("d", "2"), params.get("pic_th", "0.98"))
+            av = ["-vf", f]
+        else:
+            f = "select='gt(scene,%s)',showinfo" % params.get("threshold", "0.3")
+            av = ["-vf", f]
+        cmd = [CONFIG["ffmpeg_bin"], "-hide_banner", "-i", inputs[0]] + av + ["-f", "null", "-"]
+        return {"stages": [_stage(meta["label"], cmd)],
+                "notes": ["Results appear in the log output below."], "outputs": []}
+
+    # ── Free-form ──────────────────────────────────────────────────────────
+    if op == "freeform":
+        if not CONFIG.get("allow_raw_ffmpeg"):
+            raise ValueError("Free-form FFmpeg mode is disabled unless allow_raw_ffmpeg is enabled in config.json.")
+        line = (params.get("line") or "").strip()
+        if not line:
+            raise ValueError("Nothing to run.")
+        return {"stages": [_stage("custom", [CONFIG["ffmpeg_bin"], "-hide_banner"] + shlex.split(line))],
+                "notes": ["Run verbatim — no arguments were added."], "outputs": []}
+
+    if op == "custom":
+        if not CONFIG.get("allow_raw_ffmpeg"):
+            raise ValueError("Custom FFmpeg mode is disabled unless allow_raw_ffmpeg is enabled in config.json.")
+        need(1)
+        cmd = base_cmd(spec)
+        if params.get("pre"):
+            cmd += shlex.split(str(params["pre"]))
+        cmd += ["-i", inputs[0]]
+        for extra in inputs[1:]:
+            cmd += ["-i", extra]
+        if params.get("post"):
+            cmd += shlex.split(str(params["post"]))
+        o = out_path(spec, "custom_output.mp4")
+        cmd.append(o)
+        return {"stages": [_stage("custom", cmd)], "notes": [], "outputs": [o]}
+
+    # ── Everything else starts from the common skeleton ────────────────────
+    cmd = base_cmd(spec)
+    seek = spec.get("seek") or {}
+
+    # ---- Convert / transcode -------------------------------------------
+    if op in ("transcode", "trim", "audio_convert"):
+        need(1)
+        if op == "trim":
+            fast = not _b(seek.get("accurate"))
+            cmd += seek_args(seek, True)
+            cmd += ["-i", inputs[0]]
+            cmd += seek_args(seek, False)
+            o = out_path(spec, "trimmed.mp4")
+            if fast and not _vf(spec) and not _af(spec):
+                cmd += ["-c", "copy", "-avoid_negative_ts", "make_zero"]
+                notes.append("Fast copy mode: cuts land on the nearest keyframe. "
+                             "Tick 'accurate' to re-encode for frame-exact cuts.")
+            else:
+                vf, af = _vf(spec), _af(spec)
+                if vf:
+                    cmd += ["-vf", vf]
+                if af:
+                    cmd += ["-af", af]
+                cmd += encoder_args(enc, want_video=False if spec.get("_audio_only") else True,
+                                    container=os.path.splitext(o)[1][1:])
+            cmd.append(o)
+            outputs.append(o)
+            stages.append(_stage("trim", cmd))
+        elif op == "audio_convert":
+            cmd += seek_args(seek, True) + ["-i", inputs[0]] + seek_args(seek, False)
+            af = _af(spec)
+            if af:
+                cmd += ["-af", af]
+            o = fix_audio_container(out_path(spec, "converted.mp3"), enc.get("acodec"), notes)
+            cmd += ["-vn"] + encoder_args(enc, want_video=None,
+                                          container=os.path.splitext(o)[1][1:])
+            cmd.append(o)
+            outputs.append(o)
+            stages.append(_stage("audio encode", cmd))
+        else:
+            o = out_path(spec, "transcoded.mp4")
+            ext = os.path.splitext(o)[1][1:]
+            twopass = _b(enc.get("twopass"))
+            vf, af = _vf(spec), _af(spec)
+            if twopass and enc.get("vbitrate"):
+                passlog = os.path.join(TMP_DIR, "ff2pass_%s" % uuid.uuid4().hex[:8])
+                cleanup.extend([passlog, passlog + ".cutree", passlog + "-0.log", passlog + "-0.log.mbtree"])
+                for p in (1, 2):
+                    c = base_cmd(spec) + seek_args(seek, True) + ["-i", inputs[0]] + seek_args(seek, False)
+                    pass_enc = dict(enc)
+                    x265 = enc.get("vcodec") == "libx265"
+                    if x265:
+                        pass_enc["x_params"] = ":".join(filter(None, [enc.get("x_params"), "pass=%d:stats=%s" % (p, passlog)]))
+                    if vf:
+                        c += ["-vf", vf]
+                    if p == 1:
+                        c += encoder_args(pass_enc, want_audio=False, container=ext)
+                        if not x265:
+                            c += ["-pass", "1", "-passlogfile", passlog]
+                        c += ["-f", "null", os.devnull]
+                    else:
+                        if af:
+                            c += ["-af", af]
+                        c += encoder_args(pass_enc, container=ext)
+                        if not x265:
+                            c += ["-pass", "2", "-passlogfile", passlog]
+                        c += [o]
+                    stages.append(_stage("pass %d" % p, c))
+                notes.append("Two-pass encoding targets the average bitrate precisely.")
+                outputs.append(o)
+            else:
+                cmd += seek_args(seek, True) + ["-i", inputs[0]]
+                for extra in inputs[1:]:
+                    cmd += ["-i", extra]
+                cmd += seek_args(seek, False)
+                if vf:
+                    cmd += ["-vf", vf]
+                if af:
+                    cmd += ["-af", af]
+                for m in (spec.get("maps") or []):
+                    if str(m).strip():
+                        cmd += ["-map", str(m).strip()]
+                cmd += encoder_args(enc, want_video=False if spec.get("_audio_only") else True, container=ext)
+                cmd.append(o)
+                outputs.append(o)
+                stages.append(_stage("encode", cmd))
+
+    elif op == "remux":
+        need(1)
+        o = out_path(spec, "remuxed.mkv")
+        cmd += ["-i", inputs[0], "-map", "0", "-c", "copy"]
+        if os.path.splitext(o)[1].lower() in (".mp4", ".m4v", ".mov"):
+            cmd += ["-movflags", "+faststart"]
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("remux", cmd))
+        notes.append("Streams are copied byte-for-byte; only the container changes.")
+
+    elif op == "images_to_video":
+        need(1)
+        o = out_path(spec, "from_images.mp4")
+        if params.get("pattern_type") == "glob":
+            cmd += ["-framerate", str(params.get("framerate", 25)), "-pattern_type", "glob",
+                    "-i", inputs[0]]
+        else:
+            cmd += ["-framerate", str(params.get("framerate", 25)), "-i", inputs[0]]
+        vf = _vf(spec, ["format=yuv420p"])
+        cmd += ["-vf", vf]
+        cmd += encoder_args(enc, want_audio=False, container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("assemble", cmd))
+
+    elif op == "video_to_images":
+        need(1)
+        outdir = (spec.get("output") or "").strip() or "frames"
+        outdir = resolve_path(outdir, for_output=bool(spec.get("_creating")))
+        if spec.get("_creating"):
+            os.makedirs(outdir, exist_ok=True)
+        pattern = safe_output_pattern(outdir, params.get("pattern") or "frame_%05d.png")
+        vf = _vf(spec, ["fps=%s" % (params.get("fps") or "1")])
+        cmd += seek_args(seek, True) + ["-i", inputs[0]] + seek_args(seek, False)
+        cmd += ["-vf", vf, "-vsync", "vfr"]
+        if pattern.lower().endswith((".jpg", ".jpeg")):
+            cmd += ["-q:v", str(params.get("quality", 2))]
+        cmd.append(pattern)
+        outputs.append(outdir)
+        stages.append(_stage("extract frames", cmd))
+
+    # ---- Streams --------------------------------------------------------
+    elif op == "extract_audio":
+        need(1)
+        idx = str(params.get("index", "0") or "0")
+        if not stream_kinds(inputs[0])["audio"]:
+            raise ValueError("This file has no audio track to extract.")
+        o = fix_audio_container(out_path(spec, "audio.m4a"), enc.get("acodec"), notes)
+        cmd += seek_args(seek, True) + ["-i", inputs[0]] + seek_args(seek, False)
+        cmd += ["-map", "0:a:%s" % idx, "-vn"]
+        af = _af(spec)
+        if af:
+            cmd += ["-af", af]
+        cmd += encoder_args(enc, want_video=None, container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("extract audio", cmd))
+
+    elif op == "extract_video":
+        need(1)
+        o = out_path(spec, "video_only.mp4")
+        cmd += ["-i", inputs[0], "-map", "0:v:%s" % (params.get("index", "0") or "0"),
+                "-an", "-sn", "-c", "copy", o]
+        outputs.append(o)
+        stages.append(_stage("extract video", cmd))
+
+    elif op == "extract_subs":
+        need(1)
+        o = out_path(spec, "subtitles.srt")
+        cmd += ["-i", inputs[0], "-map", "0:s:%s" % (params.get("index", "0") or "0"), o]
+        outputs.append(o)
+        stages.append(_stage("extract subtitles", cmd))
+
+    elif op == "extract_all_subs":
+        need(1)
+        info = summarize_probe(ffprobe_json(inputs[0]))
+        subs = [s for s in info["streams"] if s["type"] == "subtitle"]
+        if not subs:
+            raise ValueError("This file has no subtitle streams.")
+        fmt = params.get("fmt") or "srt"
+        base = os.path.splitext(inputs[0])[0]
+        c = base_cmd(spec) + ["-i", inputs[0]]
+        for n, s in enumerate(subs):
+            lang = re.sub(r"[^A-Za-z0-9_-]", "_", s.get("language") or "und")[:32]
+            o = resolve_path("%s.track%d.%s.%s" % (base, n, lang, fmt), for_output=bool(spec.get("_creating")))
+            c += ["-map", "0:s:%d" % n, o]
+            outputs.append(o)
+        stages.append(_stage("extract all subtitles", c))
+        notes.append("Extracted %d subtitle track(s)." % len(subs))
+
+    elif op == "extract_attachments":
+        need(1)
+        outdir = resolve_path((spec.get("output") or "attachments"),
+                             for_output=bool(spec.get("_creating")))
+        if spec.get("_creating"):
+            os.makedirs(outdir, exist_ok=True)
+        attachments = [s for s in ffprobe_json(inputs[0]).get("streams", []) if s.get("codec_type") == "attachment"]
+        if not attachments:
+            raise ValueError("This file has no attachments.")
+        c = [CONFIG["ffmpeg_bin"], "-hide_banner", "-nostdin", "-y" if _b(spec.get("overwrite", "1")) else "-n"]
+        for n, stream in enumerate(attachments):
+            original = (stream.get("tags") or {}).get("filename", "attachment.bin")
+            name = re.sub(r"[^\w. -]", "_", os.path.basename(original.replace("\\", "/"))).lstrip(".") or "attachment.bin"
+            target = safe_output_pattern(outdir, "%03d_%s" % (n, name))
+            c += ["-dump_attachment:t:%d" % n, target]
+        c += ["-i", inputs[0], "-f", "null", "-"]
+        stages.append(_stage("dump attachments", c, cwd=outdir))
+        outputs.append(outdir)
+        notes.append("Attachments (usually fonts) are written into %s" % outdir)
+
+    elif op == "strip":
+        need(1)
+        o = out_path(spec, "stripped.mkv")
+        cmd += ["-i", inputs[0], "-map", "0", "-c", "copy"]
+        if _b(params.get("audio")):
+            cmd.append("-an")
+        if _b(params.get("video")):
+            cmd.append("-vn")
+        if _b(params.get("subs")):
+            cmd.append("-sn")
+        if _b(params.get("data")):
+            cmd.append("-dn")
+        if _b(params.get("chapters")):
+            cmd += ["-map_chapters", "-1"]
+        if _b(params.get("metadata")):
+            cmd += ["-map_metadata", "-1"]
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("strip streams", cmd))
+
+    elif op == "add_audio":
+        need(2)
+        o = out_path(spec, "with_audio.mkv")
+        mode = params.get("mode") or "replace"
+        delay = _n(params.get("delay"), 0) or 0
+        cmd += ["-i", inputs[0]]
+        if delay:
+            cmd += ["-itsoffset", str(delay)]
+        cmd += ["-i", inputs[1]]
+        if mode == "replace":
+            cmd += ["-map", "0:v", "-map", "1:a", "-c:v", "copy"]
+            cmd += ["-c:a", params.get("acodec") or "copy"]
+        elif mode == "add":
+            cmd += ["-map", "0", "-map", "1:a", "-c", "copy"]
+        else:  # mix
+            cmd += ["-filter_complex", "[0:a][1:a]amix=inputs=2:duration=longest[aout]"]
+            cmd += ["-map", "0:v", "-map", "[aout]", "-c:v", "copy",
+                    "-c:a", (params.get("acodec") if params.get("acodec") != "copy" else "aac") or "aac"]
+        if _b(params.get("shortest")):
+            cmd.append("-shortest")
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("mux audio", cmd))
+
+    elif op == "add_subs":
+        need(2)
+        o = out_path(spec, "with_subs.mkv")
+        if (params.get("mode") or "soft") == "burn":
+            style = params.get("style") or ""
+            sub_arg = "subtitles=%s" % _esc_filter_value(inputs[1])
+            if style:
+                sub_arg += ":force_style='%s'" % style.replace("'", "")
+            vf = _vf(spec, [sub_arg])
+            cmd += ["-i", inputs[0], "-vf", vf]
+            cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="copy"),
+                                container=os.path.splitext(o)[1][1:])
+            cmd.append(o)
+            notes.append("Burn-in re-encodes the video; subtitles become permanent.")
+        else:
+            existing_subs = sum(s.get("codec_type") == "subtitle" for s in ffprobe_json(inputs[0]).get("streams", [])) if os.path.exists(inputs[0]) else 0
+            scodec = params.get("scodec") or "auto"
+            if scodec == "auto":
+                scodec = "mov_text" if os.path.splitext(o)[1].lower() in (".mp4", ".m4v", ".mov") else "srt"
+            cmd += ["-i", inputs[0], "-i", inputs[1], "-map", "0", "-map", "1:s:0",
+                    "-c", "copy", "-c:s", scodec,
+                    "-metadata:s:s:%d" % existing_subs, "language=%s" % (params.get("lang") or "eng")]
+            if params.get("title"):
+                cmd += ["-metadata:s:s:%d" % existing_subs, "title=%s" % params["title"]]
+            if _b(params.get("default")):
+                cmd += ["-disposition:s:%d" % existing_subs, "default"]
+            cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("add subtitles", cmd))
+
+    elif op == "mux":
+        if len(inputs) < 2:
+            raise ValueError("Add at least two input files.")
+        o = out_path(spec, "muxed.mkv")
+        for i in inputs:
+            cmd += ["-i", i]
+        maps = [m.strip() for m in str(params.get("maps") or "").splitlines() if m.strip()]
+        if maps:
+            for m in maps:
+                cmd += ["-map", m]
+        else:
+            for n in range(len(inputs)):
+                cmd += ["-map", str(n)]
