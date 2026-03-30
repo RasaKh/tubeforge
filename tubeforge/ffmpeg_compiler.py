@@ -1054,7 +1054,7 @@ def build_ffmpeg(spec):
             scodec = params.get("scodec") or "auto"
             if scodec == "auto":
                 scodec = "mov_text" if os.path.splitext(o)[1].lower() in (".mp4", ".m4v", ".mov") else "srt"
-            cmd += ["-i", inputs[0], "-i", inputs[1], "-map", "0", "-map", "1:s:0",
+            cmd += ["-i", inputs[0], "-i", inputs[1], "-map", "0", "-map", "1",
                     "-c", "copy", "-c:s", scodec,
                     "-metadata:s:s:%d" % existing_subs, "language=%s" % (params.get("lang") or "eng")]
             if params.get("title"):
@@ -1078,3 +1078,505 @@ def build_ffmpeg(spec):
         else:
             for n in range(len(inputs)):
                 cmd += ["-map", str(n)]
+        cmd += ["-c", "copy", o]
+        outputs.append(o)
+        stages.append(_stage("mux", cmd))
+
+    elif op == "map_streams":
+        need(1)
+        o = out_path(spec, "remapped.mkv")
+        cmd += ["-i", inputs[0]]
+        for m in [x.strip() for x in str(params.get("maps") or "").splitlines() if x.strip()]:
+            cmd += ["-map", m]
+        cmd += encoder_args(with_defaults(enc, vcodec="copy", acodec="copy"),
+                            container=os.path.splitext(o)[1][1:]) or ["-c", "copy"]
+        for line in [x.strip() for x in str(params.get("disposition") or "").splitlines() if x.strip()]:
+            bits = line.split(None, 1)
+            if len(bits) == 2:
+                cmd += ["-disposition:%s" % bits[0], bits[1]]
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("remap", cmd))
+
+    elif op == "metadata":
+        need(1)
+        o = out_path(spec, "tagged.mkv")
+        cmd += ["-i", inputs[0], "-map", "0", "-c", "copy"]
+        if _b(params.get("strip_first")):
+            cmd += ["-map_metadata", "-1"]
+        for line in [x.strip() for x in str(params.get("global_tags") or "").splitlines() if x.strip()]:
+            cmd += ["-metadata", line]
+        for line in [x.strip() for x in str(params.get("stream_tags") or "").splitlines() if x.strip()]:
+            bits = line.split(None, 1)
+            if len(bits) == 2:
+                cmd += ["-metadata:%s" % bits[0], bits[1]]
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("write metadata", cmd))
+
+    # ---- Edit -----------------------------------------------------------
+    elif op == "cut_out":
+        need(1)
+        o = out_path(spec, "cut.mp4")
+        a = parse_time_to_seconds(params.get("start")) or 0
+        b = parse_time_to_seconds(params.get("end")) or 0
+        if b <= a:
+            raise ValueError("The end of the removed range must come after its start.")
+        has = stream_kinds(inputs[0])
+        if not has["video"]:
+            raise ValueError("This file has no video track to cut.")
+        if has["audio"]:
+            fc = ("[0:v]trim=end=%s,setpts=PTS-STARTPTS[v0];"
+                  "[0:v]trim=start=%s,setpts=PTS-STARTPTS[v1];"
+                  "[0:a]atrim=end=%s,asetpts=PTS-STARTPTS[a0];"
+                  "[0:a]atrim=start=%s,asetpts=PTS-STARTPTS[a1];"
+                  "[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]") % (a, b, a, b)
+            maps = ["-map", "[v]", "-map", "[a]"]
+        else:
+            fc = ("[0:v]trim=end=%s,setpts=PTS-STARTPTS[v0];"
+                  "[0:v]trim=start=%s,setpts=PTS-STARTPTS[v1];"
+                  "[v0][v1]concat=n=2:v=1:a=0[v]") % (a, b)
+            maps = ["-map", "[v]"]
+            notes.append("This file has no audio, so only the picture was joined.")
+        cmd += ["-i", inputs[0], "-filter_complex", fc] + maps
+        cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="aac"),
+                            container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("cut segment out", cmd))
+        notes.append("Re-encoding is unavoidable when joining across a removed range.")
+
+    elif op in ("split_time", "split_size"):
+        need(1)
+        outdir = resolve_path((spec.get("output") or "split_output"),
+                             for_output=bool(spec.get("_creating")))
+        if spec.get("_creating"):
+            os.makedirs(outdir, exist_ok=True)
+        pattern = safe_output_pattern(
+            outdir, pattern_with_ext(params.get("pattern") or "part_%03d", inputs[0]))
+        cmd += ["-i", inputs[0], "-map", "0", "-c", "copy", "-f", "segment"]
+        if op == "split_time":
+            cmd += ["-segment_time", str(params.get("seconds") or 600)]
+        else:
+            raw_size = str(params.get("size") or "1900M")
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)([kKmMgG]?)(i?)[bB]?", raw_size)
+            if not match:
+                raise ValueError("Size must be bytes or a value such as 100M / 100MiB.")
+            target_bytes = float(match[1]) * ((1024 if match[3] else 1000) ** ("kmg".find(match[2].lower()) + 1) if match[2] else 1)
+            info = ffprobe_json(inputs[0]).get("format", {})
+            duration, size = _n(info.get("duration")), _n(info.get("size"))
+            if not duration or not size or target_bytes <= 0:
+                raise ValueError("Size splitting needs a finite file duration and positive target size.")
+            seconds = max(0.001, duration * target_bytes / size)
+            cmd += ["-segment_time", "%.6f" % seconds]
+            notes.append("Approximate size: %.3f seconds per part, estimated from average bitrate. Variable bitrate and keyframes can exceed the target; this is not a hard size cap." % seconds)
+        if _b(params.get("reset", "1")):
+            cmd += ["-reset_timestamps", "1"]
+        cmd.append(pattern)
+        outputs.append(outdir)
+        stages.append(_stage("split", cmd))
+
+    elif op == "split_chapters":
+        need(1)
+        info = summarize_probe(ffprobe_json(inputs[0]))
+        chapters = info["chapters"]
+        if not chapters:
+            raise ValueError("This file has no chapter markers.")
+        outdir = resolve_path((spec.get("output") or "chapters"),
+                             for_output=bool(spec.get("_creating")))
+        if spec.get("_creating"):
+            os.makedirs(outdir, exist_ok=True)
+        pat = pattern_with_ext(params.get("pattern") or "%02d - %s", inputs[0])
+        for n, ch in enumerate(chapters, 1):
+            title = re.sub(r'[/\\:*?"<>|]', "_", ch["title"] or ("chapter%02d" % n))
+            try:
+                name = pat % (n, title)
+            except TypeError:
+                name = pattern_with_ext("%02d - %s" % (n, title), inputs[0])
+            o = safe_output_pattern(outdir, name)
+            c = base_cmd(spec) + ["-ss", str(ch["start"]), "-i", inputs[0],
+                                  "-t", "%.3f" % max(0.001, ch["end"] - ch["start"]),
+                                  "-map", "0", "-c", "copy", o]
+            stages.append(_stage("chapter %d" % n, c))
+            outputs.append(o)
+        notes.append("Split into %d chapter files." % len(chapters))
+
+    elif op == "concat":
+        if len(inputs) < 2:
+            raise ValueError("Add at least two files to join.")
+        o = out_path(spec, "joined.mp4")
+        if (params.get("mode") or "demuxer") == "demuxer":
+            lst = os.path.join(TMP_DIR, "concat_%s.txt" % uuid.uuid4().hex[:8])
+            if any("\n" in f or "\r" in f for f in inputs):
+                raise ValueError("Concat filenames cannot contain line breaks.")
+            contents = "".join("file '%s'\n" % f.replace("'", "'\\''") for f in inputs)
+            cleanup.append(lst)
+            cmd += ["-f", "concat", "-safe", "0", "-i", lst, "-map", "0", "-c", "copy", o]
+            notes.append("Demuxer mode requires identical codecs and parameters. "
+                         "If the result is broken, switch to filter mode.")
+        else:
+            with_audio = _b(params.get("audio", "1"))
+            if with_audio and not all(stream_kinds(f)["audio"] for f in inputs):
+                raise ValueError("A clip has no audio. Add a silent track or explicitly disable audio for this join.")
+            for f in inputs:
+                cmd += ["-i", f]
+            n = len(inputs)
+            first_video = next(
+                (s for s in ffprobe_json(inputs[0]).get("streams", [])
+                 if s.get("codec_type") == "video" and not (s.get("disposition") or {}).get("attached_pic")),
+                None,
+            )
+            if first_video is None:
+                raise ValueError("Filter concat requires video streams in the inputs (or use demuxer mode for audio-only files).")
+            width, height = first_video["width"], first_video["height"]
+            prefix = []
+            for i in range(n):
+                prefix.append("[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS[v%d]" % (i, width, height, width, height, i))
+                if with_audio:
+                    prefix.append("[%d:a]asetpts=PTS-STARTPTS[a%d]" % (i, i))
+            if with_audio:
+                streams = "".join("[v%d][a%d]" % (i, i) for i in range(n))
+                fc = ";".join(prefix + ["%sconcat=n=%d:v=1:a=1[v][a]" % (streams, n)])
+                cmd += ["-filter_complex", fc, "-map", "[v]", "-map", "[a]"]
+            else:
+                streams = "".join("[v%d]" % i for i in range(n))
+                fc = ";".join(prefix + ["%sconcat=n=%d:v=1:a=0[v]" % (streams, n)])
+                cmd += ["-filter_complex", fc, "-map", "[v]"]
+            cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="aac"),
+                                container=os.path.splitext(o)[1][1:])
+            cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("join", cmd, prepare_files={lst: contents}) if (params.get("mode") or "demuxer") == "demuxer" else _stage("join", cmd))
+
+    elif op == "speed":
+        need(1)
+        o = out_path(spec, "speed.mp4")
+        factor = _n(params.get("factor", 2))
+        # A zero or negative factor is meaningless, and negatives never climb
+        # back into atempo's valid range — the correction loop would not end.
+        if factor is None or factor <= 0:
+            raise ValueError("Speed factor must be greater than zero. "
+                             "Use 2 for twice as fast, 0.5 for half speed.")
+        if factor < 0.01 or factor > 100:
+            raise ValueError("Speed factor must be between 0.01 and 100.")
+        has = stream_kinds(inputs[0])
+        keep_audio = _b(params.get("keep_audio", "1")) and has["audio"]
+        if _b(params.get("keep_audio", "1")) and not has["audio"]:
+            notes.append("This file has no audio track, so only the video speed was changed.")
+        if not has["video"]:
+            raise ValueError("This file has no video track. Use 'Convert audio file' "
+                             "with a tempo filter to change audio speed.")
+        vparts = ["setpts=%.6f*PTS" % (1.0 / factor)]
+        if _b(params.get("interpolate")) and factor < 1:
+            vparts.append("minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc")
+        # atempo only accepts 0.5-2.0, so chain until we reach the target
+        aparts, remaining = [], factor
+        while remaining > 2.0:
+            aparts.append("atempo=2.0")
+            remaining /= 2.0
+        while remaining < 0.5:
+            aparts.append("atempo=0.5")
+            remaining /= 0.5
+        aparts.append("atempo=%.6f" % remaining)
+        cmd += ["-i", inputs[0], "-filter_complex"]
+        if keep_audio:
+            cmd.append("[0:v]%s[v];[0:a]%s[a]" % (",".join(vparts), ",".join(aparts)))
+            cmd += ["-map", "[v]", "-map", "[a]"]
+        else:
+            cmd.append("[0:v]%s[v]" % ",".join(vparts))
+            cmd += ["-map", "[v]", "-an"]
+        cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="aac"),
+                            want_audio=keep_audio, container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("speed change", cmd))
+
+    elif op == "reverse":
+        need(1)
+        o = out_path(spec, "reversed.mp4")
+        has = stream_kinds(inputs[0])
+        cmd += ["-i", inputs[0]]
+        if not has["video"] and has["audio"]:
+            cmd += ["-af", _af(spec, ["areverse"]), "-vn"]
+            cmd += encoder_args(with_defaults(enc, acodec="aac"),
+                                want_video=False, container=os.path.splitext(o)[1][1:])
+        else:
+            if _b(params.get("audio", "1")) and has["audio"]:
+                cmd += ["-vf", _vf(spec, ["reverse"]), "-af", _af(spec, ["areverse"])]
+            else:
+                cmd += ["-vf", _vf(spec, ["reverse"]), "-an"]
+                if _b(params.get("audio", "1")) and not has["audio"]:
+                    notes.append("This file has no audio track to reverse.")
+            cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="aac"),
+                                container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("reverse", cmd))
+        notes.append("Reversing buffers the whole clip in memory — keep it short.")
+
+    elif op == "loop_clip":
+        need(1)
+        o = out_path(spec, "looped.mp4")
+        count = int(_n(params.get("count"), 3) or 3)
+        cmd += ["-stream_loop", str(max(0, count - 1)), "-i", inputs[0], "-map", "0", "-c", "copy", o]
+        outputs.append(o)
+        stages.append(_stage("loop", cmd))
+
+    elif op == "stabilize":
+        need(1)
+        o = out_path(spec, "stabilized.mp4")
+        trf = os.path.join(TMP_DIR, "vidstab_%s.trf" % uuid.uuid4().hex[:8])
+        cleanup.append(trf)
+        c1 = base_cmd(spec) + ["-i", inputs[0], "-vf",
+                               "vidstabdetect=shakiness=%s:accuracy=%s:result=%s" % (
+                                   params.get("shakiness", 5), params.get("accuracy", 15), trf),
+                               "-f", "null", os.devnull]
+        vf = _vf(spec, ["vidstabtransform=input=%s:smoothing=%s:zoom=%s" % (
+            trf, params.get("smoothing", 30), params.get("zoom", 0)), "unsharp=5:5:0.8:3:3:0.4"])
+        c2 = base_cmd(spec) + ["-i", inputs[0], "-vf", vf]
+        c2 += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="copy"),
+                           container=os.path.splitext(o)[1][1:])
+        c2.append(o)
+        stages += [_stage("analyse motion", c1), _stage("apply stabilisation", c2)]
+        outputs.append(o)
+        notes.append("Requires an ffmpeg build with libvidstab.")
+
+    elif op == "loudnorm2":
+        need(1)
+        if not stream_kinds(inputs[0])["audio"]:
+            raise ValueError("This file has no audio track to normalise.")
+        o = out_path(spec, "normalized.mp4")
+        ln = "loudnorm=I=%s:TP=%s:LRA=%s" % (params.get("I", -16), params.get("TP", -1.5),
+                                             params.get("LRA", 11))
+        af_prefix = _af(spec)
+        c1_chain = ",".join(filter(None, [af_prefix, ln + ":print_format=json"]))
+        c1 = [CONFIG["ffmpeg_bin"], "-hide_banner", "-i", inputs[0],
+              "-af", c1_chain, "-f", "null", "-"]
+        stages.append(_stage("measure loudness", c1, capture="loudnorm"))
+        c2_chain = ",".join(filter(None, [af_prefix, "__LOUDNORM__"]))
+        c2 = base_cmd(spec) + ["-i", inputs[0], "-af", c2_chain]
+        if not spec.get("_audio_only"):
+            c2 += ["-c:v", "copy"]
+        c2 += encoder_args(enc,
+                           want_video=None, container=os.path.splitext(o)[1][1:])
+        c2.append(o)
+        stages.append(_stage("apply correction", c2, needs="loudnorm", loudnorm_base=ln))
+        outputs.append(o)
+        notes.append("Pass one measures, pass two applies exact correction values.")
+
+    # ---- Compose --------------------------------------------------------
+    elif op == "watermark":
+        need(2)
+        o = out_path(spec, "watermarked.mp4")
+        m = str(params.get("margin", 20) or 20)
+        pos = params.get("position") or "bottom-right"
+        if pos == "custom":
+            x, y = params.get("x") or "10", params.get("y") or "10"
+        else:
+            xt, yt = POSITIONS.get(pos, POSITIONS["bottom-right"])
+            x, y = xt.replace("{m}", m), yt.replace("{m}", m)
+        pre = []
+        if params.get("scale"):
+            pre.append("[1:v]scale=%s:-1[wm0]" % params["scale"])
+            src = "[wm0]"
+        else:
+            src = "[1:v]"
+        op_ = _n(params.get("opacity", 1))
+        if op_ is None or not 0 <= op_ <= 1:
+            raise ValueError("Opacity must be between 0 and 1.")
+        if op_ < 1:
+            pre.append("%sformat=rgba,colorchannelmixer=aa=%.3f[wm]" % (src, op_))
+            src = "[wm]"
+        fc = ";".join(pre + ["[0:v]%soverlay=%s:%s[v]" % (src, x, y)])
+        cmd += ["-i", inputs[0], "-i", inputs[1], "-filter_complex", fc,
+                "-map", "[v]", "-map", "0:a?"]
+        cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="copy"),
+                            container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("overlay watermark", cmd))
+
+    elif op == "pip":
+        need(2)
+        o = out_path(spec, "pip.mp4")
+        m = str(params.get("margin", 24) or 24)
+        xt, yt = POSITIONS.get(params.get("position") or "bottom-right", POSITIONS["bottom-right"])
+        fc = "[1:v]scale=%s:-1[pip];[0:v][pip]overlay=%s:%s[v]" % (
+            params.get("width", 480), xt.replace("{m}", m), yt.replace("{m}", m))
+        amode = params.get("audio") or "0"
+        if amode == "mix" and not all(stream_kinds(f)["audio"] for f in inputs[:2]):
+            amode = "0" if stream_kinds(inputs[0])["audio"] else ("1" if stream_kinds(inputs[1])["audio"] else "none")
+            notes.append("Mixing skipped; using the available audio track." if amode != "none" else "Neither input contains audio.")
+        if amode == "mix":
+            fc += ";[0:a][1:a]amix=inputs=2[a]"
+        cmd += ["-i", inputs[0], "-i", inputs[1], "-filter_complex", fc, "-map", "[v]"]
+        if amode == "mix":
+            cmd += ["-map", "[a]"]
+        elif amode in ("0", "1"):
+            cmd += ["-map", "%s:a?" % amode]
+        else:
+            cmd += ["-an"]
+        cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="aac"),
+                            container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("picture in picture", cmd))
+
+    elif op == "stack":
+        need(2)
+        o = out_path(spec, "stacked.mp4")
+        direction = "hstack" if (params.get("dir") or "h") == "h" else "vstack"
+        if _b(params.get("normalize", "1")):
+            if direction == "hstack":
+                fc = "[0:v]scale=-2:720[l];[1:v]scale=-2:720[r];[l][r]hstack=inputs=2[v]"
+            else:
+                fc = "[0:v]scale=1280:-2[l];[1:v]scale=1280:-2[r];[l][r]vstack=inputs=2[v]"
+        else:
+            fc = "[0:v][1:v]%s=inputs=2[v]" % direction
+        amode = params.get("audio") or "0"
+        if amode == "mix" and not all(stream_kinds(f)["audio"] for f in inputs[:2]):
+            amode = "0" if stream_kinds(inputs[0])["audio"] else ("1" if stream_kinds(inputs[1])["audio"] else "none")
+            notes.append("Mixing skipped; using the available audio track." if amode != "none" else "Neither input contains audio.")
+        if amode == "mix":
+            fc += ";[0:a][1:a]amix=inputs=2[a]"
+        cmd += ["-i", inputs[0], "-i", inputs[1], "-filter_complex", fc, "-map", "[v]"]
+        if amode == "mix":
+            cmd += ["-map", "[a]"]
+        elif amode in ("0", "1"):
+            cmd += ["-map", "%s:a?" % amode]
+        else:
+            cmd += ["-an"]
+        cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="aac"),
+                            container=os.path.splitext(o)[1][1:])
+        cmd.append(o)
+        outputs.append(o)
+        stages.append(_stage("stack", cmd))
+
+    elif op == "add_cover":
+        need(2)
+        o = out_path(spec, "with_cover.m4a")
+        cmd += ["-i", inputs[0], "-i", inputs[1], "-map", "0:a", "-map", "1:v",
+                "-c", "copy", "-disposition:v:0", "attached_pic", o]
+        outputs.append(o)
+        stages.append(_stage("attach cover", cmd))
+
+    # ---- Export ---------------------------------------------------------
+    elif op in ("gif", "webp"):
+        need(1)
+        o = out_path(spec, "animation." + op)
+        start = params.get("start") or "0"
+        dur = params.get("duration") or "5"
+        fps = params.get("fps") or (15 if op == "gif" else 20)
+        width = params.get("width") or 600
+        base_chain = "fps=%s,scale=%s:-1:flags=lanczos" % (fps, width)
+        user_chain = compile_filterchain(spec.get("vfilters"), "video")
+        if user_chain:
+            base_chain = base_chain + "," + user_chain
+        if op == "gif":
+            palette = os.path.join(TMP_DIR, "palette_%s.png" % uuid.uuid4().hex[:8])
+            cleanup.append(palette)
+            c1 = base_cmd(spec) + ["-ss", str(start), "-t", str(dur), "-i", inputs[0],
+                                   "-vf", "%s,palettegen=max_colors=%s:stats_mode=diff" % (
+                                       base_chain, params.get("colors", 256)),
+                                   palette]
+            c2 = base_cmd(spec) + ["-ss", str(start), "-t", str(dur), "-i", inputs[0], "-i", palette,
+                                   "-lavfi", "%s[x];[x][1:v]paletteuse=dither=%s" % (
+                                       base_chain, params.get("dither", "sierra2_4a")),
+                                   "-loop", str(params.get("loop", 0)), o]
+            stages += [_stage("build palette", c1), _stage("encode gif", c2)]
+            notes.append("A per-clip palette gives dramatically better colour than the default 216.")
+        else:
+            cmd += ["-ss", str(start), "-t", str(dur), "-i", inputs[0], "-vf", base_chain,
+                    "-vcodec", "libwebp", "-lossless", "1" if _b(params.get("lossless")) else "0",
+                    "-quality", str(params.get("quality", 75)), "-loop", "0", "-an", o]
+            stages.append(_stage("encode webp", cmd))
+        outputs.append(o)
+
+    elif op == "screenshot":
+        need(1)
+        o = out_path(spec, "frame.png")
+        vf = _vf(spec, ["scale=%s:-1" % params.get("width", -1)] if str(params.get("width", -1)) != "-1" else None)
+        cmd += ["-ss", str(params.get("time") or "0"), "-i", inputs[0], "-frames:v", "1"]
+        if vf:
+            cmd += ["-vf", vf]
+        cmd += ["-q:v", "2", o]
+        outputs.append(o)
+        stages.append(_stage("grab frame", cmd))
+
+    elif op == "thumbnails":
+        need(1)
+        o = out_path(spec, "contact_sheet.jpg")
+        cols = int(_n(params.get("cols"), 5) or 5)
+        rows = int(_n(params.get("rows"), 5) or 5)
+        interval = _n(params.get("interval"), 30) or 30
+        vf = "fps=1/%s,scale=%s:-1,tile=%dx%d:margin=%s:padding=%s" % (
+            interval, params.get("width", 320), cols, rows,
+            params.get("margin", 6), params.get("margin", 6))
+        cmd += ["-i", inputs[0], "-vf", vf, "-frames:v", "1", "-q:v", "3", o]
+        outputs.append(o)
+        stages.append(_stage("contact sheet", cmd))
+
+    elif op == "waveform":
+        need(1)
+        o = out_path(spec, "waveform.png")
+        color = (params.get("colors") or "#ff6b35").lstrip("#")
+        cmd += ["-i", inputs[0], "-filter_complex",
+                "showwavespic=s=%s:colors=0x%s:split_channels=0:draw=%s" % (
+                    params.get("size", "1920x480"), color,
+                    "full" if params.get("mode") == "line" else "scale"),
+                "-frames:v", "1", o]
+        outputs.append(o)
+        stages.append(_stage("waveform", cmd))
+
+    elif op == "spectrogram":
+        need(1)
+        o = out_path(spec, "spectrogram.png")
+        cmd += ["-i", inputs[0], "-lavfi",
+                "showspectrumpic=s=%s:mode=%s:scale=%s:color=%s" % (
+                    params.get("size", "1920x1080"), params.get("mode", "combined"),
+                    params.get("scale", "log"), params.get("color", "intensity")),
+                "-frames:v", "1", o]
+        outputs.append(o)
+        stages.append(_stage("spectrogram", cmd))
+
+    elif op == "visualizer":
+        need(1)
+        if not stream_kinds(inputs[0])["audio"]:
+            raise ValueError("This file has no audio track to visualise.")
+        o = out_path(spec, "visualizer.mp4")
+        style = params.get("style") or "showwaves"
+        size = params.get("size") or "1280x720"
+        color = (params.get("color") or "#ff6b35").lstrip("#")
+        if style == "showwaves":
+            fc = "[0:a]showwaves=s=%s:mode=cline:colors=0x%s[v]" % (size, color)
+        elif style == "showspectrum":
+            fc = "[0:a]showspectrum=s=%s:mode=combined:color=intensity:slide=scroll[v]" % size
+        elif style == "showfreqs":
+            fc = "[0:a]showfreqs=s=%s:mode=bar:colors=0x%s[v]" % (size, color)
+        elif style == "showcqt":
+            fc = "[0:a]showcqt=s=%s[v]" % size
+        else:
+            fc = "[0:a]avectorscope=s=%s:zoom=1.5[v]" % size
+        cmd += ["-i", inputs[0]]
+        if params.get("bg"):
+            bg = resolve_path(params["bg"], must_exist=True)
+            cmd += ["-loop", "1", "-i", bg]
+            fc += ";[1:v]scale=%s[bg];[bg][v]overlay=0:0:format=auto[vout]" % size
+            vlabel = "[vout]"
+        else:
+            vlabel = "[v]"
+        cmd += ["-filter_complex", fc, "-map", vlabel, "-map", "0:a"]
+        cmd += encoder_args(with_defaults(enc, vcodec="libx264", crf=20, acodec="aac"),
+                            container=os.path.splitext(o)[1][1:])
+        cmd += ["-shortest", o]
+        outputs.append(o)
+        stages.append(_stage("render visualiser", cmd))
+
+    else:
+        raise ValueError("Operation '%s' is declared but not implemented." % op)
+
+    return {"stages": stages, "notes": notes, "outputs": outputs, "cleanup": cleanup,
+            "effective": {"enc": enc, "params": params, "output": spec.get("output"),
+                          "audio_only": spec.get("_audio_only", False)}}
+
+
