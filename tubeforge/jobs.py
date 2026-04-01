@@ -358,3 +358,155 @@ class Job:
                                       lower.startswith("warning")) else "stdout"
                 self.emit(stream, line)
             now = time.time()
+            if now - last_push > 0.4:
+                last_push = now
+                BUS.publish({"type": "progress", "id": self.id,
+                             "progress": self.progress, "status": self.status})
+        self.proc.wait()
+        rc = self.proc.returncode
+        self.proc = None
+        return rc, "\n".join(captured)
+
+    def cancel(self):
+        self.cancel_requested = True
+        p = self.proc
+        if p and p.poll() is None:
+            try:
+                if hasattr(os, "killpg"):
+                    os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+                else:
+                    p.terminate()
+                for _ in range(30):
+                    if p.poll() is not None:
+                        break
+                    time.sleep(0.1)
+                if p.poll() is None:
+                    if hasattr(os, "killpg"):
+                        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                    else:
+                        p.kill()
+            except Exception:
+                pass
+        elif self.status == "queued":
+            with JOBS.lock:
+                try:
+                    JOBS.pending.remove(self)
+                except ValueError:
+                    pass
+                self.status = "cancelled"
+                self.finished = time.time()
+            self.push_state()
+
+
+class JobManager:
+    def __init__(self):
+        self.jobs = {}
+        self.order = deque()
+        self.pending = deque()
+        self.lock = threading.RLock()
+        self.slots = threading.Condition(self.lock)
+        self.running_count = 0
+        self.workers = []
+        self.wake = threading.Semaphore(0)
+        self._ensure_workers()
+
+    def _ensure_workers(self):
+        want = max(1, int(CONFIG.get("max_concurrent_jobs", 2)))
+        while len(self.workers) < want:
+            t = threading.Thread(target=self._worker, daemon=True,
+                                 name="tf-worker-%d" % len(self.workers))
+            t.start()
+            self.workers.append(t)
+        with self.slots:
+            self.slots.notify_all()
+
+    def _worker(self):
+        while True:
+            self.wake.acquire()
+            with self.slots:
+                while self.running_count >= max(1, int(CONFIG.get("max_concurrent_jobs", 2))):
+                    self.slots.wait()
+                job = self.pending.popleft() if self.pending else None
+                if job:
+                    self.running_count += 1
+            if job is None:
+                continue
+            try:
+                if job.cancel_requested:
+                    job.status = "cancelled"
+                    job.finished = time.time()
+                    job.push_state()
+                    continue
+                job.run()
+            finally:
+                with self.slots:
+                    self.running_count -= 1
+                    self.slots.notify_all()
+
+    def submit(self, job):
+        with self.lock:
+            wanted = [os.path.realpath(p) for p in job.outputs]
+            for active in self.jobs.values():
+                if active.status in ("queued", "running") and set(wanted).intersection(os.path.realpath(p) for p in active.outputs):
+                    raise PathError("Another queued/running job is writing the same output.")
+            self.jobs[job.id] = job
+            self.order.appendleft(job.id)
+            self.pending.append(job)
+            self._ensure_workers()
+            limit = max(1, int(CONFIG.get("keep_job_history", 500)))
+            for old in list(reversed(self.order)):
+                if len(self.order) <= limit:
+                    break
+                if self.jobs[old].status not in ("queued", "running"):
+                    self.order.remove(old)
+                    self.jobs.pop(old, None)
+        job.push_state()
+        self.wake.release()
+        return job
+
+    def get(self, jid):
+        return self.jobs.get(jid)
+
+    def list(self, limit=200):
+        with self.lock:
+            ids = list(self.order)[:limit]
+        return [self.jobs[i].brief() for i in ids if i in self.jobs]
+
+    def active(self):
+        return [j for j in self.jobs.values() if j.status in ("queued", "running")]
+
+    def cancel_all(self):
+        n = 0
+        for j in list(self.jobs.values()):
+            if j.status in ("queued", "running"):
+                j.cancel()
+                n += 1
+        return n
+
+    def clear_finished(self):
+        with self.lock:
+            keep = deque()
+            removed = 0
+            for jid in self.order:
+                j = self.jobs.get(jid)
+                if j and j.status in ("queued", "running"):
+                    keep.append(jid)
+                else:
+                    self.jobs.pop(jid, None)
+                    removed += 1
+            self.order = keep
+        return removed
+
+
+JOBS = JobManager()
+
+
+def make_job(kind, title, stages, cwd=None, spec=None, meta=None):
+    if isinstance(stages, list) and stages and isinstance(stages[0], list):
+        stages = [{"label": "run", "argv": stages[0]}]
+    for s in stages:
+        if s["argv"] and os.path.basename(s["argv"][0]) not in ALLOWED_BINARIES:
+            raise PathError("Refusing to run '%s' — not in the allow-list." % s["argv"][0])
+    return Job(kind, title, stages, cwd=cwd, spec=spec, meta=meta)
+
+
