@@ -218,3 +218,243 @@ kbd{
 .cols-side{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:14px;align-items:start}
 @media (max-width:1180px){.cols,.cols-side{grid-template-columns:1fr}}
 
+/* ─── Controls ──────────────────────────────────────────────────────── */
+.field{margin-bottom:11px}
+.field:last-child{margin-bottom:0}
+label,.lbl{
+  display:block;font:600 .6rem/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--dim);margin-bottom:5px;
+}
+.help{font-size:.71rem;color:var(--dim);margin-top:4px;line-height:1.45}
+input[type=text],input[type=number],input[type=password],select,textarea{
+  width:100%;padding:7px 9px;background:var(--void);color:var(--ink);
+  border:1px solid var(--seam);border-radius:var(--r);
+  font:400 .8rem/1.35 var(--sans);transition:border-color var(--t),background var(--t);
+}
+input[type=text],textarea,input[type=password]{font-family:var(--mono);font-size:.76rem}
+select{font-family:var(--sans);cursor:pointer}
+input:hover,select:hover,textarea:hover{border-color:var(--seam-hi)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--tally);background:var(--rack)}
+input::placeholder,textarea::placeholder{color:#4d545e}
+textarea{resize:vertical;min-height:62px}
+input[type=range]{width:100%;accent-color:var(--tally)}
+.inline{display:flex;gap:7px;align-items:center}
+.inline > *{margin-bottom:0}
+.inline input,.inline select{flex:1;min-width:0}
+
+.check{
+  display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:5px 0;
+  font-size:.8rem;color:var(--ink-dim);line-height:1.35;
+}
+.check:hover{color:var(--ink)}
+.check input{margin-top:2px;accent-color:var(--tally);flex:none;width:14px;height:14px;cursor:pointer}
+.check.on{color:var(--ink)}
+.check small{display:block;color:var(--dim);font-size:.7rem;margin-top:2px}
+.checks{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:2px 16px}
+/* The ? is a sibling of the label rather than a child, otherwise clicking it
+   would activate the label and flip the very setting it is describing. */
+.check-wrap{display:flex;align-items:flex-start;gap:5px}
+/* The label sizes to its text rather than filling the cell, so the ? sits just
+   after the words instead of being pushed to the far edge of the column. */
+.check-wrap > .check{flex:0 1 auto;min-width:0}
+.check-wrap > .qmark{margin-top:6px;flex:none}
+
+.btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:8px 15px;background:var(--raise);color:var(--ink);
+  border:1px solid var(--seam-hi);border-radius:var(--r);cursor:pointer;
+  font:600 .76rem/1 var(--sans);transition:var(--t);white-space:nowrap;
+}
+.btn:hover{background:var(--seam);border-color:var(--dim)}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn.go{background:var(--tally);color:#0b0c0e;border-color:var(--tally);font-weight:700}
+.btn.go:hover{filter:brightness(1.12)}
+.btn.alt{background:transparent;color:var(--signal);border-color:var(--signal)}
+.btn.alt:hover{background:rgba(53,214,176,.1)}
+.btn.bad{background:transparent;color:var(--fault);border-color:rgba(255,77,94,.4)}
+.btn.bad:hover{background:rgba(255,77,94,.12);border-color:var(--fault)}
+.btn.sm{padding:5px 9px;font-size:.7rem}
+.btn.icon{padding:5px 7px}
+.btns{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btns.end{justify-content:flex-end}
+
+.chip{
+  display:inline-flex;align-items:center;gap:5px;padding:4px 9px;
+  background:var(--void);border:1px solid var(--seam);border-radius:12px;
+  font:500 .71rem/1 var(--sans);color:var(--ink-dim);cursor:pointer;transition:var(--t);
+}
+.chip:hover{border-color:var(--tally);color:var(--ink)}
+.chip.on{background:var(--tally);color:#0b0c0e;border-color:var(--tally);font-weight:600}
+.chip.mono{font-family:var(--mono);font-size:.68rem}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+
+.tag{
+  display:inline-block;padding:2px 6px;border-radius:3px;
+  font:600 .6rem/1.5 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+}
+.tag.video{background:rgba(90,169,248,.16);color:var(--info)}
+.tag.audio{background:rgba(53,214,176,.16);color:var(--signal)}
+.tag.both{background:rgba(255,107,53,.16);color:var(--tally)}
+.tag.subtitle{background:rgba(245,166,35,.16);color:var(--warn)}
+.tag.image{background:rgba(190,140,255,.16);color:#be8cff}
+.tag.other,.tag.data{background:var(--seam);color:var(--ink-dim)}
+
+/* ─── Command readout ───────────────────────────────────────────────── */
+.readout{
+  background:var(--void);border:1px solid var(--seam);border-left:2px solid var(--tally);
+  border-radius:var(--r);padding:11px 12px;
+  font:400 .73rem/1.65 var(--mono);color:var(--ink-dim);
+  white-space:pre-wrap;word-break:break-all;overflow-x:auto;position:relative;
+}
+.readout .bin{color:var(--tally);font-weight:600}
+.readout .flag{color:var(--signal)}
+.readout .str{color:var(--ink)}
+.readout + .readout{margin-top:8px}
+.readout-stage{
+  font:600 .58rem/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--dim);margin-bottom:6px;display:block;
+}
+.copy-btn{
+  position:absolute;top:6px;right:6px;opacity:0;transition:var(--t);
+  background:var(--rail);border:1px solid var(--seam);color:var(--ink-dim);
+  border-radius:3px;padding:3px 7px;font:500 .62rem/1 var(--sans);cursor:pointer;
+}
+.readout:hover .copy-btn{opacity:1}
+.copy-btn:hover{color:var(--ink);border-color:var(--seam-hi)}
+
+.term{
+  background:#08090b;border:1px solid var(--seam);border-radius:var(--r);
+  padding:10px 12px;font:400 .72rem/1.55 var(--mono);
+  height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;color:#a8b0ba;
+}
+.term .stdout{color:#a8b0ba}
+.term .stderr{color:#ff8b96}
+.term .meta{color:var(--tally);font-weight:600}
+.term:empty::after{content:"waiting for output…";color:var(--dim);font-style:italic}
+
+/* ─── Tables ────────────────────────────────────────────────────────── */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--seam);border-radius:var(--r)}
+table{width:100%;border-collapse:collapse;font-size:.76rem}
+th{
+  position:sticky;top:0;background:var(--rail);text-align:left;padding:8px 10px;
+  font:600 .58rem/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;color:var(--dim);
+  border-bottom:1px solid var(--seam);white-space:nowrap;cursor:pointer;user-select:none;z-index:2;
+}
+th:hover{color:var(--ink)}
+th.sorted{color:var(--tally)}
+td{padding:6px 10px;border-bottom:1px solid var(--seam);color:var(--ink-dim);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--rail);color:var(--ink)}
+tbody tr.picked td{background:rgba(255,107,53,.09)}
+td.num{text-align:right;font-family:var(--mono)}
+td.mono,th.mono{font-family:var(--mono)}
+
+/* ─── File library ──────────────────────────────────────────────────── */
+.breadcrumb{
+  display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+  font:400 .73rem/1 var(--mono);color:var(--dim);margin-bottom:10px;
+}
+.breadcrumb button{background:none;border:0;color:var(--ink-dim);cursor:pointer;font:inherit;padding:2px 3px}
+.breadcrumb button:hover{color:var(--tally);text-decoration:underline}
+.filerow{
+  display:grid;grid-template-columns:52px minmax(0,1fr) auto auto 26px;gap:11px;align-items:center;
+  padding:6px 10px;border-bottom:1px solid var(--seam);font-size:.79rem;cursor:pointer;
+}
+/* Size and date are reference information; the name is what people read. It
+   gets whatever is left, and the numbers shrink out of the way first. */
+.filerow .fmeta{font-variant-numeric:tabular-nums;text-align:right}
+.filerow .fmeta.size{min-width:66px}
+.filerow .fmeta.date{min-width:104px}
+@media (max-width:1500px){ .filerow{grid-template-columns:52px minmax(0,1fr) auto 26px} 
+  .filerow .fmeta.date{display:none} }
+@media (max-width:1150px){ .filerow{grid-template-columns:44px minmax(0,1fr) 26px}
+  .filerow .fmeta.size{display:none} }
+/* The type badge sits in its own fixed column so long extensions cannot run
+   underneath the file name. */
+.filerow > :first-child{min-width:0;overflow:hidden}
+.filerow .tag{
+  display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  text-align:center;
+}
+.filerow.partial{opacity:.55}
+.filerow.partial .fname{text-decoration:line-through;text-decoration-color:var(--dim)}
+.filerow:hover{background:var(--rail)}
+.filerow.picked{background:rgba(255,107,53,.08)}
+.filerow .fname{font-family:var(--mono);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.filerow .fmeta{font:400 .68rem/1 var(--mono);color:var(--dim);white-space:nowrap}
+/* Actions used to sit inline and reserve their width on every row even when
+   invisible. Now one button opens them, so the space goes to the file name. */
+/* History and preset rows keep their two buttons inline — there are few enough
+   that a menu would be more work than it saves. */
+.filerow .facts{display:flex;gap:5px;justify-content:flex-end}
+.rowmenu-btn{
+  background:none;border:1px solid transparent;border-radius:var(--r);
+  color:var(--dim);cursor:pointer;padding:2px 5px;line-height:1;font-size:.9rem;
+  opacity:0;transition:var(--t);
+}
+.filerow:hover .rowmenu-btn,.filerow.menuopen .rowmenu-btn{opacity:1}
+.rowmenu-btn:hover{background:var(--raise);border-color:var(--seam-hi);color:var(--ink)}
+.filerow.menuopen{background:var(--rail)}
+.filerow.head{
+  background:var(--rail);cursor:default;padding:7px 10px;
+}
+.filerow.head:hover{background:var(--rail)}
+.listrow{
+  display:flex;align-items:center;gap:11px;
+  padding:7px 12px;border-bottom:1px solid var(--seam);font-size:.79rem;
+}
+.listrow:last-child{border-bottom:0}
+.listrow:hover{background:var(--rail)}
+.listrow .fname{
+  flex:1;min-width:0;font-family:var(--mono);font-size:.74rem;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.listrow .fmeta{font:400 .68rem/1 var(--mono);color:var(--dim);white-space:nowrap}
+.listrow .facts{display:flex;gap:6px;flex:none;align-items:center}
+.rowmenu{
+  position:fixed;z-index:420;min-width:158px;padding:4px;
+  background:var(--raise);border:1px solid var(--seam-hi);border-radius:6px;
+  box-shadow:0 16px 40px rgba(0,0,0,.55);
+}
+.rowmenu[hidden]{display:none}
+.rowmenu .rm-head{
+  padding:6px 9px 7px;border-bottom:1px solid var(--seam);margin-bottom:4px;
+  font:400 .68rem/1.35 var(--mono);color:var(--dim);
+  word-break:break-all;max-width:230px;
+}
+.rowmenu button,.rowmenu a{
+  display:block;width:100%;text-align:left;background:none;border:0;border-radius:var(--r);
+  padding:6px 9px;color:var(--ink-dim);font:500 .76rem/1.2 var(--sans);cursor:pointer;
+  text-decoration:none;
+}
+.rowmenu button:hover,.rowmenu a:hover{background:var(--rail);color:var(--ink)}
+.rowmenu button.bad:hover{background:rgba(255,77,94,.14);color:var(--fault)}
+.rowmenu .rm-sep{height:1px;background:var(--seam);margin:4px 0}
+.grid-files{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:11px}
+.card{
+  background:var(--rack);border:1px solid var(--seam);border-radius:var(--r);
+  overflow:hidden;cursor:pointer;transition:var(--t);
+}
+.card:hover{border-color:var(--seam-hi);transform:translateY(-1px)}
+.card.picked{border-color:var(--tally)}
+.card.partial{opacity:.5;cursor:default}
+.card.partial:hover{transform:none;border-color:var(--seam)}
+.card .thumb{
+  aspect-ratio:16/9;background:var(--void);display:flex;align-items:center;justify-content:center;
+  color:var(--dim);font-size:1.5rem;overflow:hidden;
+}
+.card .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.card .cap{padding:7px 8px}
+.card .cap .n{font:400 .7rem/1.3 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.card .cap .m{font:400 .64rem/1 var(--mono);color:var(--dim);margin-top:3px}
+
+/* ─── Job dock ──────────────────────────────────────────────────────── */
+#dock{
+  background:var(--rack);border-top:1px solid var(--seam);
+  display:grid;grid-template-rows:32px 1fr;height:var(--dock-h);transition:height var(--t);
+}
+#dock.min{height:32px}
+#dock.max{height:62vh}
+.dock-bar{
+  display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--rail);
