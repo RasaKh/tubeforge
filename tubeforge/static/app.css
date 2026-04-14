@@ -1,0 +1,220 @@
+:root{
+  --void:#0b0c0e; --rack:#121418; --rail:#171a1f; --raise:#1d2128;
+  --seam:#272c34; --seam-hi:#343a44;
+  --ink:#dfe3e8; --ink-dim:#98a1ad; --dim:#6d7682;
+  --tally:#ff6b35; --signal:#35d6b0; --warn:#f5a623; --fault:#ff4d5e; --info:#5aa9f8;
+  --mono:ui-monospace,"JetBrains Mono","Fira Code","Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+  --sans:ui-sans-serif,"Inter","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  --r:4px; --rail-w:212px; --jump-w:26px; --dock-h:236px;
+  --t:120ms cubic-bezier(.4,0,.2,1);
+}
+[data-theme="daylight"]{
+  --void:#e8e6e1; --rack:#f4f3f0; --rail:#eceae5; --raise:#ffffff;
+  --seam:#d3d0c9; --seam-hi:#bdb9b0;
+  --ink:#1c1e22; --ink-dim:#4c525c; --dim:#7a808a;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:calc(16px * var(--fs,1))}
+body{
+  font-family:var(--sans); background:var(--void); color:var(--ink);
+  line-height:1.5; -webkit-font-smoothing:antialiased;
+  height:100vh; overflow:hidden;
+}
+::selection{background:var(--tally);color:#000}
+:focus-visible{outline:2px solid var(--tally);outline-offset:2px}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--seam);border-radius:5px;border:2px solid var(--void)}
+::-webkit-scrollbar-thumb:hover{background:var(--seam-hi)}
+
+/* ─── Shell ─────────────────────────────────────────────────────────── */
+#shell{display:grid;grid-template-rows:44px 1fr auto;height:100vh}
+#topbar{
+  display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:var(--rack);border-bottom:1px solid var(--seam);
+}
+.wordmark{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:.02em}
+.wordmark b{font-size:.95rem}
+.wordmark span{font:500 .62rem/1 var(--mono);color:var(--dim);letter-spacing:.14em;text-transform:uppercase}
+/* Sized to the cap height of the wordmark beside it, so a running job is
+   visible from across the room rather than being a pinprick. */
+.tally-lamp{
+  width:14px;height:14px;border-radius:50%;background:var(--seam-hi);
+  box-shadow:0 0 0 1px rgba(0,0,0,.5) inset;flex:none;transition:background var(--t);
+}
+.tally-lamp.live{
+  background:var(--tally);
+  box-shadow:0 0 0 1px rgba(0,0,0,.4) inset, 0 0 10px var(--tally), 0 0 20px rgba(255,107,53,.45);
+  animation:pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.topbar-path{
+  font:400 .72rem/1 var(--mono);color:var(--ink-dim);
+  padding:5px 9px;background:var(--void);border:1px solid var(--seam);border-radius:var(--r);
+  max-width:38ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;
+}
+.topbar-path:hover{border-color:var(--seam-hi);color:var(--ink)}
+.spacer{flex:1}
+.topbar-btn{
+  font:500 .7rem/1 var(--sans);color:var(--ink-dim);background:transparent;
+  border:1px solid var(--seam);border-radius:var(--r);padding:6px 10px;cursor:pointer;
+  transition:var(--t);white-space:nowrap;
+}
+.topbar-btn:hover{color:var(--ink);border-color:var(--seam-hi);background:var(--rail)}
+kbd{
+  font:500 .62rem/1 var(--mono);background:var(--void);border:1px solid var(--seam);
+  border-bottom-width:2px;border-radius:3px;padding:2px 4px;color:var(--dim);
+}
+
+/* ─── Layout ────────────────────────────────────────────────────────── */
+#body{display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr) var(--jump-w) var(--rail-w);overflow:hidden;min-height:0}
+/* Explicit placement. Without it, hiding the jump rail lets the browser
+   re-flow the remaining children and the right rail slides into the 26px
+   jump column. */
+#rail{grid-column:1}
+#work{grid-column:2}
+#jumprail{grid-column:3}
+#rail-r{grid-column:4}
+/* Views short enough to need no jumping collapse the track instead of
+   removing the element, which keeps the other columns where they are. */
+#body.nojump{grid-template-columns:var(--rail-w) minmax(0,1fr) 0 var(--rail-w)}
+#body.nojump #jumprail{display:none}
+#rail,#rail-r{
+  background:var(--rack);overflow-y:auto;padding:10px 0 20px;
+}
+#rail{border-right:1px solid var(--seam)}
+#rail-r{border-left:1px solid var(--seam)}
+#rail-r .nav{border-left:0;border-right:2px solid transparent}
+#rail-r .nav.on{border-right-color:var(--tally)}
+#rail-r .rail-foot{
+  margin-top:14px;padding:12px 16px 0;border-top:1px solid var(--seam);
+  font:400 .66rem/1.5 var(--mono);color:var(--dim);
+}
+#rail-r .rail-foot b{display:block;color:var(--ink-dim);font-weight:600;margin-bottom:3px}
+.rail-group{margin-bottom:6px}
+.rail-head{
+  font:600 .58rem/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);padding:12px 16px 6px;
+}
+.nav{
+  display:flex;align-items:center;gap:10px;width:100%;
+  padding:7px 16px;background:none;border:0;border-left:2px solid transparent;
+  color:var(--ink-dim);font:500 .82rem/1.2 var(--sans);cursor:pointer;text-align:left;
+  transition:var(--t);
+}
+.nav:hover{color:var(--ink);background:var(--rail)}
+.nav.on{color:var(--ink);background:var(--rail);border-left-color:var(--tally)}
+.nav .ic{width:15px;text-align:center;opacity:.8;font-size:.9rem;flex:none}
+.nav .count{
+  margin-left:auto;font:600 .6rem/1 var(--mono);background:var(--seam);
+  color:var(--ink-dim);padding:2px 5px;border-radius:3px;
+}
+/* Which binary a screen drives. Silkscreened onto the panel, like a rack label. */
+.nav{flex-wrap:wrap}
+.nav .tool{
+  flex-basis:100%;margin-left:25px;font:500 .55rem/1.3 var(--mono);
+  letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+}
+.nav.on .tool{color:var(--ink-dim)}
+.tool-tag{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:3px;
+  font:600 .58rem/1 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+  background:var(--void);border:1px solid var(--seam);color:var(--dim);white-space:nowrap;
+}
+.tool-tag::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+.tool-tag.ytdlp{color:var(--tally);border-color:rgba(255,107,53,.3)}
+.tool-tag.ffmpeg{color:var(--signal);border-color:rgba(53,214,176,.3)}
+.tool-tag.ffprobe{color:var(--info);border-color:rgba(90,169,248,.3)}
+.tool-tag.local{color:var(--dim)}
+.tool-row{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.view-head h1{display:flex;align-items:center;gap:11px;flex-wrap:wrap}
+#work{overflow-y:auto;padding:20px 22px 40px;min-width:0;scroll-behavior:smooth}
+#work:focus{outline:none}
+#work:focus-visible{outline:none}
+/* Proximity, not mandatory: the page settles onto a section when you stop near
+   one, but never fights a deliberate scroll past it. */
+#work.snap{scroll-snap-type:y proximity}
+#work.snap .zone{scroll-snap-align:start;scroll-margin-top:14px}
+
+/* Two tall buttons standing in for the top and bottom of the page. The lit one
+   tells you which end you are at; pressing the other takes you there. */
+#jumprail{
+  display:flex;flex-direction:column;gap:3px;padding:3px;
+  background:var(--rack);border-left:1px solid var(--seam);
+}
+.jump{
+  flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  background:var(--rail);border:1px solid var(--seam);border-radius:var(--r);
+  color:var(--dim);cursor:pointer;padding:10px 0;transition:var(--t);min-height:0;
+}
+.jump:hover{background:var(--raise);color:var(--ink);border-color:var(--seam-hi)}
+.jump:active{transform:scale(.985)}
+.jump.on{
+  background:var(--tally);border-color:var(--tally);color:#0b0c0e;
+  box-shadow:0 0 12px rgba(255,107,53,.32);
+}
+.jump .arrow{font-size:.72rem;line-height:1}
+.jump .jlabel{
+  writing-mode:vertical-rl;text-orientation:mixed;
+  font:600 .58rem/1 var(--mono);letter-spacing:.22em;
+}
+.jump.on .jlabel{font-weight:700}
+@media (max-width:900px){ #jumprail{display:none} }
+
+
+.view{display:none;max-width:1560px;animation:fade var(--t)}
+.view.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ─── Panel primitives ──────────────────────────────────────────────── */
+.view-head{margin-bottom:13px;padding-bottom:9px;border-bottom:1px solid var(--seam)}
+.view-head h1{font-size:1.12rem;font-weight:650;letter-spacing:-.01em}
+.view-head p{color:var(--dim);font-size:.75rem;margin-top:2px;max-width:88ch}
+
+/* The long explanation moves behind this, so the screen starts with controls
+   rather than three lines of prose. */
+.qmark{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:15px;height:15px;flex:none;border-radius:50%;
+  border:1px solid var(--seam-hi);background:var(--rack);
+  color:var(--dim);font:700 .62rem/1 var(--sans);cursor:help;
+  padding:0;transition:var(--t);vertical-align:middle;
+}
+.qmark:hover,.qmark:focus-visible{border-color:var(--tally);color:var(--tally);background:var(--rail)}
+.panel-head .qmark{margin-left:-2px}
+#tip{
+  position:fixed;z-index:460;max-width:340px;padding:9px 11px;
+  background:var(--raise);border:1px solid var(--seam-hi);border-radius:6px;
+  box-shadow:0 14px 36px rgba(0,0,0,.5);
+  font:400 .74rem/1.5 var(--sans);color:var(--ink-dim);
+}
+#tip[hidden]{display:none}
+#tip b{color:var(--ink);display:block;margin-bottom:3px;font-size:.76rem}
+#tip code{font-family:var(--mono);font-size:.7rem;color:var(--tally)}
+.panel{
+  background:var(--rack);border:1px solid var(--seam);border-radius:var(--r);
+  margin-bottom:14px;overflow:hidden;
+}
+.panel-head{
+  display:flex;align-items:center;gap:10px;padding:9px 13px;
+  background:var(--rail);border-bottom:1px solid var(--seam);
+}
+.panel-head h3{
+  font:600 .63rem/1 var(--mono);letter-spacing:.15em;text-transform:uppercase;color:var(--ink-dim);
+}
+.panel-head .hint{font-size:.72rem;color:var(--dim)}
+.panel-head{flex-wrap:wrap;row-gap:7px}
+.panel-head input[type=text]{padding:5px 8px;font-size:.72rem}
+.panel-body{padding:14px 13px}
+.panel.collapsed .panel-body{display:none}
+.panel-head.clickable{cursor:pointer;user-select:none}
+.panel-head.clickable:hover{background:var(--raise)}
+.chev{transition:transform var(--t);color:var(--dim);font-size:.7rem}
+.panel.collapsed .chev{transform:rotate(-90deg)}
+
+.cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.cols-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+.cols-side{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:1180px){.cols,.cols-side{grid-template-columns:1fr}}
+
