@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>TubeForge — yt-dlp &amp; ffmpeg control surface</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="shell">
+
+  <!-- ── Top bar ───────────────────────────────────────────────────── -->
+  <header id="topbar">
+    <button class="topbar-btn" id="railToggle" style="display:none">≡</button>
+    <div class="wordmark"><i class="tally-lamp" id="lamp"></i><b>TUBEFORGE</b><span>v4.0</span></div>
+    <div class="topbar-path" id="pathChip" title="Working folder — click to open the library">…</div>
+    <div class="spacer"></div>
+    <button class="topbar-btn" onclick="openPalette()">Search <kbd>Ctrl K</kbd></button>
+    <button class="topbar-btn" id="depsBtn" onclick="showDeps()">Tools</button>
+    <button class="topbar-btn" onclick="toggleTheme()">Theme</button>
+  </header>
+
+  <div id="body">
+    <!-- ── Rail ────────────────────────────────────────────────────── -->
+    <nav id="rail">
+      <div class="rail-group">
+        <div class="rail-head">Acquire</div>
+        <button class="nav on" data-view="fetch"><span class="ic">↓</span>Fetch<span class="tool">yt-dlp</span></button>
+        <button class="nav" data-view="formats"><span class="ic">≡</span>Formats<span class="tool">yt-dlp</span></button>
+        <button class="nav" data-view="history"><span class="ic">↺</span>URL history<span class="tool">stored locally</span></button>
+      </div>
+      <div class="rail-group">
+        <div class="rail-head">Process</div>
+        <button class="nav" data-view="lab"><span class="ic">◆</span>Media lab<span class="tool">ffmpeg</span></button>
+        <button class="nav" data-view="filters"><span class="ic">∿</span>Filter studio<span class="count filtCount">0</span><span class="tool">ffmpeg</span></button>
+        <button class="nav" data-view="pipeline"><span class="ic">⇉</span>Pipeline<span class="tool">ffmpeg</span></button>
+        <button class="nav" data-view="batch"><span class="ic">▦</span>Batch<span class="tool">ffmpeg</span></button>
+        <button class="nav" data-view="inspect"><span class="ic">◎</span>Inspector<span class="tool">ffprobe</span></button>
+      </div>
+      <div class="rail-group moved">
+        <div class="rail-head">Manage</div>
+        <button class="nav" data-view="library"><span class="ic">▤</span>Library<span class="tool">files on disk</span></button>
+        <button class="nav" data-view="queue"><span class="ic">⧗</span>Queue<span class="count qCount">0</span><span class="tool">all tools</span></button>
+        <button class="nav" data-view="presets"><span class="ic">★</span>Presets<span class="tool">stored locally</span></button>
+      </div>
+      <div class="rail-group moved">
+        <div class="rail-head">Learn</div>
+        <button class="nav" data-view="reference"><span class="ic">§</span>Reference<span class="tool">yt-dlp + ffmpeg</span></button>
+        <button class="nav" data-view="settings"><span class="ic">⚙</span>Settings<span class="tool">stored locally</span></button>
+      </div>
+    </nav>
+
+    <!-- ── Workspace ───────────────────────────────────────────────── -->
+    <main id="work" tabindex="-1">
+
+      <!-- FETCH ─────────────────────────────────────────────────────── -->
+      <section class="view on" id="view-fetch">
+        <div class="view-head zone" id="zone-setup">
+          <h1>Fetch <span class="tool-tag ytdlp">yt-dlp</span> <button class="qmark" data-tip-title="Fetch" data-tip="Everything on this screen becomes a single yt-dlp command, shown on the right and rebuilt as you type. Nothing runs until you press Start download. Quick format sets the common cases; All options exposes every switch, grouped." aria-label="About this screen">?</button></h1>
+          <p>Download from any site yt-dlp supports.</p>
+        </div>
+
+        <div class="cols-side">
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Sources</h3>
+                <span class="hint" id="urlCount">no links yet</span>
+                <div class="spacer"></div>
+                <button class="btn sm" onclick="pasteUrls()">Paste</button>
+                <button class="btn sm" onclick="$('#dlUrls').value='';syncFetch()">Clear</button>
+              </div>
+              <div class="panel-body">
+                <textarea id="dlUrls" rows="3" placeholder="https://www.youtube.com/watch?v=…&#10;https://…  (one per line, # comments out a line)"></textarea>
+                <div class="checks" style="margin-top:9px">
+                  <div class="check-wrap"><label class="check"><input type="checkbox" id="dlSplit">
+                    <span>One job per link</span></label><button class="qmark" data-tip-title="One job per link" data-tip="Each link is queued as its own job, so they run in parallel up to your concurrency setting and one failure does not stop the rest. Leave it off and a single yt-dlp process walks the list in order." aria-label="Help" type="button">?</button></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h3>Quick format</h3><button class="qmark" data-tip-title="Quick format" data-tip="These fill in the format selector under All options. The audio-only ones also switch on extraction, so you get a real .opus or .m4a rather than the raw stream left in its source container, which breaks thumbnail embedding." aria-label="Help">?</button><span class="hint">writes into the format selector</span></div>
+              <div class="panel-body"><div class="chips" id="fmtChips"></div>
+                </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Command</h3>
+                <div class="spacer"></div>
+                <button class="btn sm" onclick="savePreset('ytdlp')">Save preset</button>
+              </div>
+              <div class="panel-body">
+                <div class="readout" id="dlCmd"><span class="muted">Add a link to build the command.</span>
+                  <button class="copy-btn" data-act="copyEl">Copy</button></div>
+                <div id="dlWarnings"></div>
+                <div class="btns" style="margin-top:11px">
+                  <button class="btn go" onclick="runFetch()">Start download</button>
+                  <button class="btn" onclick="runFetch({simulate:true})">Dry run</button>
+                  <button class="btn alt" onclick="goFormats()">Inspect formats</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel collapsed">
+              <div class="panel-head clickable" onclick="togglePanel(this)">
+                <span class="chev">▾</span><h3>Naming</h3>
+                <span class="hint" id="tplSummary">default template</span></div>
+              <div class="panel-body">
+                <div class="lbl">Presets</div>
+                <div class="chips" id="tplChips"></div>
+                <div class="lbl" style="margin-top:11px">Insert a field</div>
+                <div class="chips" id="tokenChips"></div>
+                <p class="help">Fields that do not apply come out as <span class="mono">NA</span> —
+                  resolution on an audio download, for instance.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="strip" id="activeStrip"><span class="none">No options set — defaults will be used.</span></div>
+
+        <div class="panel zone" id="zone-options">
+          <div class="panel-head"><h3>All options</h3>
+            <span class="hint">every yt-dlp switch, grouped</span>
+            <div class="spacer"></div>
+            <span class="hint" id="optHitCount"></span>
+            <input type="text" id="optSearch" placeholder="filter by name…" style="width:190px" oninput="renderYtOptions()">
+            <label class="check" style="padding:0;white-space:nowrap"><input type="checkbox" id="showAdv" onchange="renderYtOptions()">
+              <span>Advanced</span></label>
+            <button class="btn sm bad" onclick="resetYtOptions()">Reset</button>
+          </div>
+          <div class="optbrowse">
+            <div class="optbrowse-list" id="optGroupList"></div>
+            <div class="optbrowse-pane" id="optGroupPane"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FORMATS ───────────────────────────────────────────────────── -->
+      <section class="view" id="view-formats">
+        <div class="view-head">
+          <h1>Formats <span class="tool-tag ytdlp">yt-dlp</span> <button class="qmark" data-tip-title="Formats" data-tip="Probing runs yt-dlp with -J, which reads metadata only and downloads no media. Tick a video row and an audio row to build a merged selection, then Use selection carries both the format IDs and the link over to Fetch." aria-label="About this screen">?</button></h1>
+          <p>See exactly what a link offers before downloading.</p>
+        </div>
+        <div class="rowflex">
+          <input type="text" id="fmtUrl" placeholder="https://…" onkeydown="if(event.key==='Enter')loadFormats()">
+          <button class="btn go" onclick="loadFormats()">Probe</button>
+          <button class="btn" onclick="loadFormats(true)">Probe as playlist</button>
+        </div>
+        <div id="fmtInfo"></div>
+        <div class="rowflex" id="fmtFilters" hidden>
+          <div class="chips">
+            <button class="chip on" data-act="fmtFilter" data-k="all">All</button>
+            <button class="chip" data-act="fmtFilter" data-k="video">Video only</button>
+            <button class="chip" data-act="fmtFilter" data-k="audio">Audio only</button>
+            <button class="chip" data-act="fmtFilter" data-k="both">Muxed</button>
+          </div>
+          <div class="spacer"></div>
+          <span class="muted mono" id="fmtPick">nothing selected</span>
+          <button class="btn alt sm" onclick="useSelectedFormats()">Use selection</button>
+        </div>
+        <div id="fmtTable"></div>
+      </section>
+
+      <!-- URL HISTORY ───────────────────────────────────────────────── -->
+      <section class="view" id="view-history">
+        <div class="view-head"><h1>URL history <span class="tool-tag local">stored locally</span> <button class="qmark" data-tip-title="URL history" data-tip="Kept in a local SQLite file under your config folder and never sent anywhere. Use Fetch to download a link again, or Formats to re-inspect what it offers." aria-label="About this screen">?</button></h1>
+          <p>Links you have fetched or probed.</p></div>
+        <div class="rowflex">
+          <input type="text" id="histSearch" placeholder="Search…" oninput="renderHistory()">
+          <button class="btn" onclick="loadHistory()">Refresh</button>
+          <button class="btn bad" onclick="clearHistory()">Clear all</button>
+        </div>
+        <div id="histList"></div>
+      </section>
+
+      <!-- MEDIA LAB ─────────────────────────────────────────────────── -->
+      <section class="view" id="view-lab">
+        <div class="view-head">
+          <h1>Media lab <span class="tool-tag ffmpeg">ffmpeg</span> <button class="qmark" data-tip-title="Media lab" data-tip="Pick an operation, give it inputs, and the exact command appears under Output before anything runs. Operations needing two passes, such as two-pass encoding or loudness normalisation, appear as numbered stages inside a single job. Copy codecs skip re-encoding entirely; quality numbers are inverted, so lower means better and larger." aria-label="About this screen">?</button></h1>
+          <p>One ffmpeg operation at a time, with full control.</p>
+        </div>
+</body>
+</html>
