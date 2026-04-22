@@ -183,5 +183,225 @@
           <h1>Media lab <span class="tool-tag ffmpeg">ffmpeg</span> <button class="qmark" data-tip-title="Media lab" data-tip="Pick an operation, give it inputs, and the exact command appears under Output before anything runs. Operations needing two passes, such as two-pass encoding or loudness normalisation, appear as numbered stages inside a single job. Copy codecs skip re-encoding entirely; quality numbers are inverted, so lower means better and larger." aria-label="About this screen">?</button></h1>
           <p>One ffmpeg operation at a time, with full control.</p>
         </div>
+        <div class="cols-side">
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Inputs</h3><button class="qmark" data-tip-title="Inputs" data-tip="Type a path, or select files in the Library and send them here. Relative names resolve inside your download folder. Operations needing two files use the first as the main input." aria-label="Help">?</button><span class="hint" id="opInputHint"></span></div>
+              <div class="panel-body"><div id="labInputs"></div></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h3>Operation</h3><div class="spacer"></div>
+                <input type="text" id="opSearch" placeholder="find an operation…" style="width:190px" oninput="renderOpPicker()"></div>
+              <div class="panel-body"><div id="opPicker"></div></div>
+            </div>
+
+            <div class="panel" id="labFieldsPanel">
+              <div class="panel-head"><h3>Settings</h3></div>
+              <div class="panel-body"><div id="labFields"></div></div>
+            </div>
+
+            <div class="panel" id="labSeekPanel">
+              <div class="panel-head clickable" onclick="togglePanel(this)"><span class="chev">▾</span><h3>Time range</h3></div>
+              <div class="panel-body">
+                <div class="cols-3">
+                  <div class="field"><label>Start</label><input type="text" id="seekSS" placeholder="00:01:30" oninput="syncLab()"></div>
+                  <div class="field"><label>End</label><input type="text" id="seekTo" placeholder="00:04:00" oninput="syncLab()"></div>
+                  <div class="field"><label>or duration</label><input type="text" id="seekT" placeholder="00:00:30" oninput="syncLab()"></div>
+                </div>
+                <div class="check-wrap"><label class="check"><input type="checkbox" id="seekAcc" onchange="lab.enc={};renderEncoder();syncLab()">
+                  <span>Frame-accurate</span></label><button class="qmark" data-tip-title="Frame-accurate" data-tip="Re-encodes so the cut lands exactly where you asked. Leave it off for an instant lossless cut that snaps to the nearest keyframe, which can be a second or two away." aria-label="Help" type="button">?</button></div>
+              </div>
+            </div>
+
+            <div class="panel" id="labFilterPanel">
+              <div class="panel-head clickable" onclick="togglePanel(this)"><span class="chev">▾</span><h3>Filter chain</h3>
+                <div class="spacer"></div><span class="hint" id="labFiltSummary">none</span></div>
+              <div class="panel-body">
+                <div class="btns"><button class="btn sm alt" onclick="show('filters')">Open filter studio</button>
+                  <button class="btn sm bad" onclick="clearFilters()">Clear chain</button></div>
+                <div id="labFiltPreview" style="margin-top:10px"></div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head clickable" onclick="togglePanel(this)"><span class="chev">▾</span><h3>Global switches</h3></div>
+              <div class="panel-body">
+                <div class="cols-3">
+                  <div class="field"><label>Hardware acceleration <button class="qmark" data-tip-title="Hardware acceleration" data-tip="Speeds up decoding when your machine supports it. Pair with a matching encoder such as `hevc_nvenc` or `h264_vaapi` for an end-to-end hardware path. Leaving it unset is always safe." aria-label="Help">?</button></label><select id="ffHw" onchange="onHwChange(this.value)"></select></div>
+                  <div class="field"><label>Log level</label>
+                    <select id="ffLog" onchange="syncLab()">
+                      <option value="info">info</option><option value="warning">warning</option>
+                      <option value="error">error</option><option value="verbose">verbose</option>
+                      <option value="debug">debug</option></select></div>
+                  <div class="field"><label>Extra args before -i</label><input type="text" id="ffPre" oninput="syncLab()" placeholder="-fflags +genpts"></div>
+                </div>
+                <label class="check"><input type="checkbox" id="ffOverwrite" onchange="syncLab()">
+                  <span>Overwrite the output if it exists</span></label>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Output</h3></div>
+              <div class="panel-body">
+                <div class="field"><label id="labOutLabel">Output file</label>
+                  <div class="inline">
+                    <input type="text" id="labOut" placeholder="Chosen from the input and codec" oninput="lab.output_mode='manual';syncLab()">
+                    <button class="btn sm" type="button" onclick="browseLabOut()">Browse…</button>
+                  </div>
+                  <div class="inline" style="margin-top:7px"><button class="btn sm" onclick="lab.output_mode='auto';syncLab()">Auto filename</button>
+                  <span class="help" id="labOutputHint">Names follow the operation and codec. Typing preserves your name.</span></div></div>
+                <div class="chips" id="containerChips"></div>
+                <div class="sep"></div>
+                <div id="labCmd"></div>
+                <div id="labNotes"></div>
+                <div class="btns" style="margin-top:11px">
+                  <button class="btn go" onclick="runLab()">Run</button>
+                  <button class="btn" onclick="syncLab(true)">Refresh command</button>
+                  <button class="btn alt" onclick="savePreset('ffmpeg')">Save preset</button>
+                  <button class="btn" onclick="sendLabToPipeline()">Add to pipeline</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel" id="labEncPanel">
+              <div class="panel-head clickable" onclick="togglePanel(this)"><span class="chev">▾</span><h3>Encoder</h3><button class="qmark" data-tip-title="Encoder" data-tip="Choose copy to move streams without re-encoding: instant and lossless, but only possible when the target container accepts that codec, and never alongside filters. Video quality numbers are inverted — lower means better and larger. Each audio codec has its own quality scale, so the controls change with the codec." aria-label="Help">?</button><div class="spacer"></div><span class="hint" id="encSummary"></span></div>
+              <div class="panel-body"><div id="encForm"></div></div>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- FILTER STUDIO ─────────────────────────────────────────────── -->
+      <section class="view" id="view-filters">
+        <div class="view-head">
+          <h1>Filter studio <span class="tool-tag ffmpeg">ffmpeg</span> <button class="qmark" data-tip-title="Filter studio" data-tip="Filters apply top to bottom and order changes the result: sharpening before a scale is not the same as sharpening after it. The generated filtergraph is shown live and feeds the Media lab, Pipeline and Batch runners. Filters cannot be combined with a copy codec." aria-label="About this screen">?</button></h1>
+          <p>Stack video and audio filters into a chain.</p>
+        </div>
+        <div class="cols-side">
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Video chain</h3><div class="spacer"></div>
+                <span class="hint" id="vChainCount">0 filters</span></div>
+              <div class="panel-body"><div id="vChain"></div>
+                <div class="btns" style="margin-top:9px"><button class="btn sm" data-act="filtPicker" data-kind="video">+ Add video filter</button></div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h3>Audio chain</h3><div class="spacer"></div>
+                <span class="hint" id="aChainCount">0 filters</span></div>
+              <div class="panel-body"><div id="aChain"></div>
+                <div class="btns" style="margin-top:9px"><button class="btn sm" data-act="filtPicker" data-kind="audio">+ Add audio filter</button></div></div>
+            </div>
+          </div>
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Filtergraph</h3></div>
+              <div class="panel-body">
+                <div class="lbl">-vf</div>
+                <div class="readout" id="vGraph"><span class="muted">empty</span>
+                  <button class="copy-btn" data-act="copyEl">Copy</button></div>
+                <div class="lbl" style="margin-top:11px">-af</div>
+                <div class="readout" id="aGraph"><span class="muted">empty</span>
+                  <button class="copy-btn" data-act="copyEl">Copy</button></div>
+                <div class="btns" style="margin-top:12px">
+                  <button class="btn alt" onclick="show('lab')">Back to lab</button>
+                  <button class="btn" onclick="savePreset('filters')">Save chain</button>
+                  <button class="btn bad" onclick="clearFilters()">Clear both</button>
+                </div>
+              </div>
+            </div>
+            <div class="panel" id="filterPreviewPanel" style="margin-top:14px">
+              <div class="panel-head"><h3>Preview Frame</h3><div class="spacer"></div>
+                <button class="btn sm" onclick="updateFilterPreview()">Refresh</button></div>
+              <div class="panel-body">
+                <div class="inline" style="margin-bottom:8px">
+                  <span class="lbl" style="margin:0;width:64px">Time (s)</span>
+                  <input type="range" id="filterPrevTime" min="0" max="60" step="0.5" value="5" oninput="$('#filterPrevTimeLbl').textContent=this.value+'s';updateFilterPreview()">
+                  <span class="mono muted" id="filterPrevTimeLbl" style="width:48px;text-align:right">5s</span>
+                </div>
+                <div id="filterPrevBox"><span class="muted">Set an input file in Media lab to preview filters on a frame.</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PIPELINE ──────────────────────────────────────────────────── -->
+      <section class="view" id="view-pipeline">
+        <div class="view-head">
+          <h1>Pipeline <span class="tool-tag ffmpeg">ffmpeg</span> <button class="qmark" data-tip-title="Pipeline" data-tip="Intermediate files go to a temp folder and are removed when the run finishes. The whole chain is one cancellable job. Each step re-encodes unless it can copy streams, so fewer steps generally means better quality." aria-label="About this screen">?</button></h1>
+          <p>Chain operations so each feeds the next.</p>
+        </div>
+        <div class="cols-side">
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Source</h3></div>
+              <div class="panel-body">
+                <div class="inline">
+                  <input type="text" id="pipeIn" placeholder="input.mp4" oninput="syncPipeline()">
+                  <button class="btn sm" type="button" onclick="browseInto('#pipeIn','file','Select pipeline source')">Browse…</button>
+                </div>
+              </div>
+            </div>
+            <div id="pipeSteps"></div>
+            <div class="btns"><button class="btn" onclick="addPipeStep()">+ Add step</button>
+              <button class="btn bad" onclick="pipeSteps=[];renderPipeline()">Remove all</button></div>
+          </div>
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Result</h3></div>
+              <div class="panel-body">
+                <div class="field"><label>Final output</label>
+                  <div class="inline">
+                    <input type="text" id="pipeOut" placeholder="pipeline_output.mp4" oninput="syncPipeline()">
+                    <button class="btn sm" type="button" onclick="browseInto('#pipeOut','save','Save pipeline output')">Browse…</button>
+                  </div></div>
+                <div id="pipeCmd"></div>
+                <div class="btns" style="margin-top:11px">
+                  <button class="btn go" onclick="runPipeline()">Run pipeline</button>
+                  <button class="btn" onclick="syncPipeline(true)">Refresh</button>
+                  <button class="btn alt" onclick="savePipeline()">Save</button>
+                  <button class="btn" onclick="loadPipelineDialog()">Load</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BATCH ─────────────────────────────────────────────────────── -->
+      <section class="view" id="view-batch">
+        <div class="view-head">
+          <h1>Batch <span class="tool-tag ffmpeg">ffmpeg</span> <button class="qmark" data-tip-title="Batch" data-tip="One job is queued per file, so they run at whatever concurrency you set in Settings. Batch reads whatever the Media lab has configured right now, so check it there first. Naming placeholders: {stem}, {ext}, {name}, {parent}." aria-label="About this screen">?</button></h1>
+          <p>Apply the current Media lab operation to many files.</p>
+        </div>
+        <div class="cols-side">
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Files</h3><div class="spacer"></div>
+                <span class="hint" id="batchCount">0 selected</span>
+                <button class="btn sm alt" type="button" onclick="browseBatchFiles()">+ Browse files…</button>
+                <button class="btn sm" onclick="show('library')">Pick in library</button>
+                <button class="btn sm bad" type="button" onclick="batchFiles=[];renderBatch()">Clear</button></div>
+              <div class="panel-body"><div id="batchList"></div>
+                <div class="field" style="margin-top:10px"><label>Or paste paths, one per line</label>
+                  <textarea id="batchPaste" rows="3" placeholder="/home/you/videos/a.mkv"></textarea></div>
+                <button class="btn sm" onclick="addPastedBatch()">Add pasted paths</button></div>
+            </div>
+          </div>
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Naming</h3></div>
+              <div class="panel-body">
+                <div class="field"><label>Output pattern</label>
+                  <input type="text" id="batchPattern" value="{stem}_out{ext}"></div>
+                <p class="help">Placeholders: <span class="mono">{stem}</span> <span class="mono">{ext}</span>
+                  <span class="mono">{name}</span> <span class="mono">{parent}</span></p>
+                <div class="field" style="margin-top:10px"><label>Output folder (blank = alongside the source)</label>
+                  <div class="inline">
+                    <input type="text" id="batchDir" placeholder="" oninput="saveLocal()">
 </body>
 </html>
