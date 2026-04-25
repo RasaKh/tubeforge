@@ -403,5 +403,165 @@
                 <div class="field" style="margin-top:10px"><label>Output folder (blank = alongside the source)</label>
                   <div class="inline">
                     <input type="text" id="batchDir" placeholder="" oninput="saveLocal()">
+                    <button class="btn sm" type="button" onclick="browseInto('#batchDir','dir','Select batch output folder')">Browse…</button>
+                  </div></div>
+                <div class="note info" id="batchOpNote">Operation: none selected</div>
+                <div class="btns" style="margin-top:11px">
+                  <button class="btn go" onclick="runBatch()">Queue all</button>
+                  <button class="btn" onclick="show('lab')">Configure operation</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- INSPECTOR ─────────────────────────────────────────────────── -->
+      <section class="view" id="view-inspect">
+        <div class="view-head">
+          <h1>Inspector <span class="tool-tag ffprobe">ffprobe</span> <button class="qmark" data-tip-title="Inspector" data-tip="Reading a file changes nothing on disk. Stream indices shown here are the ones the Media lab expects, and each row has a button that jumps straight into the matching operation with the index filled in. Chapters can be clipped or split from here too." aria-label="About this screen">?</button></h1>
+          <p>Everything ffprobe knows about a file.</p>
+        </div>
+        <div class="rowflex">
+          <input type="text" id="probePath" placeholder="/path/to/file.mkv" onkeydown="if(event.key==='Enter')doProbe()">
+          <button class="btn sm" type="button" onclick="browsePath({mode:'file',initial:$('#probePath').value,title:'Select file to inspect',onPick:p=>{$('#probePath').value=p;doProbe();}})">Browse…</button>
+          <button class="btn go" onclick="doProbe()">Inspect</button>
+          <button class="btn" onclick="doProbe(true)">Re-read from disk</button>
+        </div>
+        <div id="probeOut"></div>
+      </section>
+
+      <!-- LIBRARY ───────────────────────────────────────────────────── -->
+      <section class="view" id="view-library">
+        <div class="view-head"><h1>Library <span class="tool-tag local">files on disk</span> <button class="qmark" data-tip-title="Library" data-tip="Only folders listed under Settings are reachable. Files still downloading, and types with no decoder, cannot be selected or sent to a tool. Deleting is immediate and permanent, with no recycle bin. The ⋯ button on each row holds the actions." aria-label="About this screen">?</button></h1>
+          <p>Browse, preview and route files into any tool.</p></div>
+        <div class="breadcrumb" id="crumbs"></div>
+        <div class="rowflex">
+          <input type="text" id="libSearch" placeholder="Filter by name…" oninput="loadLibrary()">
+          <div class="chips" id="kindChips"></div>
+          <label class="check" style="padding:0"><input type="checkbox" id="libRecursive" onchange="loadLibrary()"><span>Include subfolders</span></label>
+          <label class="check" style="padding:0"><input type="checkbox" id="libGrid" onchange="renderLibrary()"><span>Thumbnails</span></label>
+          <div class="spacer"></div>
+          <button class="btn sm" onclick="loadLibrary()">Refresh</button>
+          <button class="btn sm" onclick="newFolder()">New folder</button>
+        </div>
+        <div class="rowflex" id="libActions" hidden>
+          <span class="mono muted" id="libSel">0 selected</span>
+          <button class="btn sm alt" onclick="sendSelection('lab')">→ Media lab</button>
+          <button class="btn sm alt" onclick="sendSelection('batch')">→ Batch</button>
+          <button class="btn sm alt" onclick="sendSelection('pipeline')">→ Pipeline</button>
+          <button class="btn sm alt" onclick="sendSelection('inspect')">→ Inspector</button>
+          <button class="btn sm" onclick="moveSelection()">Move…</button>
+          <button class="btn sm" onclick="clearSelection()">Deselect</button>
+          <button class="btn sm bad" onclick="deleteSelection()">Delete</button>
+        </div>
+        <div class="split">
+          <div><div id="libList"></div></div>
+          <div id="libPreview"></div>
+        </div>
+      </section>
+
+      <!-- QUEUE ─────────────────────────────────────────────────────── -->
+      <section class="view" id="view-queue">
+        <div class="view-head"><h1>Queue <span class="tool-tag local">all tools</span> <button class="qmark" data-tip-title="Queue" data-tip="Cancelling terminates the running process; partly written files are left in place so you can inspect or remove them. Job history survives restarts and is kept in a local database, with full logs on disk." aria-label="About this screen">?</button></h1>
+          <p>Everything that has run, with live output.</p></div>
+        <div class="rowflex">
+          <button class="btn bad" onclick="cancelAll()">Cancel running</button>
+          <button class="btn" onclick="clearJobs()">Clear finished</button>
+          <div class="spacer"></div>
+          <span class="mono muted" id="queueStat"></span>
+        </div>
+        <div id="queueList"></div>
+        <div class="panel" style="margin-top:16px">
+          <div class="panel-head clickable" onclick="togglePanel(this)"><span class="chev">▾</span><h3>Earlier sessions</h3>
+            <div class="spacer"></div><button class="btn sm" onclick="loadJobHistory()">Load</button></div>
+          <div class="panel-body"><div id="jobHistory"><p class="muted" style="font-size:.78rem">Press Load to read the archive.</p></div></div>
+        </div>
+      </section>
+
+      <!-- PRESETS ───────────────────────────────────────────────────── -->
+      <section class="view" id="view-presets">
+        <div class="view-head"><h1>Presets <span class="tool-tag local">stored locally</span> <button class="qmark" data-tip-title="Presets" data-tip="Presets hold options only, never file paths or URLs, so they are safe to reuse across different sources. Download presets, ffmpeg operation presets and filter chains are stored separately." aria-label="About this screen">?</button></h1>
+          <p>Saved option sets you can reapply.</p></div>
+        <div class="rowflex"><button class="btn" onclick="loadPresets()">Refresh</button></div>
+        <div id="presetList"></div>
+      </section>
+
+      <!-- REFERENCE ─────────────────────────────────────────────────── -->
+      <section class="view" id="view-reference">
+        <div class="view-head"><h1>Reference <span class="tool-tag ytdlp">yt-dlp</span><span class="tool-tag ffmpeg">ffmpeg</span> <button class="qmark" data-tip-title="Reference" data-tip="These are plain command lines you can paste into a terminal, or use as a starting point for the forms. Click any line to copy it." aria-label="About this screen">?</button></h1>
+          <p>Command lines worth knowing.</p></div>
+        <div class="rowflex"><input type="text" id="refSearch" placeholder="Search recipes…" oninput="renderReference()"></div>
+        <div id="snippetPanel" style="margin-bottom:14px"></div>
+        <div id="refGrid"></div>
+      </section>
+
+      <!-- SETTINGS ──────────────────────────────────────────────────── -->
+      <section class="view" id="view-settings">
+        <div class="view-head"><h1>Settings <button class="qmark" data-tip-title="Settings" data-tip="Stored as JSON in your config folder and applied immediately. Extra roots decide which folders the tools may touch; concurrency decides how many jobs run at once." aria-label="About this screen">?</button></h1>
+          <p>Folders, executables and behaviour.</p></div>
+        <div class="cols">
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Folders</h3>
+                <div class="spacer"></div>
+                <span class="hint mono" id="confPath"></span></div>
+              <div class="panel-body">
+                <div class="field"><label>Download folder</label>
+                  <div class="inline">
+                    <input type="text" id="cfgDir">
+                    <button class="btn sm" type="button" onclick="browseInto('#cfgDir','dir','Select download folder')">Browse…</button>
+                  </div></div>
+                <div class="field"><label>Extra folders you want reachable</label>
+                  <textarea id="cfgRoots" rows="3" placeholder="/mnt/media&#10;/home/you/Videos"></textarea>
+                  <div class="inline" style="margin-top:6px">
+                    <button class="btn sm" type="button" onclick="browsePath({mode:'dir',title:'Add reachable folder',onPick:p=>{const ta=$('#cfgRoots');const lines=ta.value.split('\n').map(s=>s.trim()).filter(Boolean);if(!lines.includes(p))lines.push(p);ta.value=lines.join('\n');}})">+ Add folder…</button>
+                    <span class="help" style="margin:0">One per line. Needed before the tools will touch files outside the download folder.</span>
+                  </div></div>
+                <div class="check-wrap"><label class="check"><input type="checkbox" id="cfgSandbox" checked disabled>
+                  <span>Restrict file access to these folders</span></label><button class="qmark" data-tip-title="Restrict file access" data-tip="Path sandboxing is always enforced for web sessions: every path the tools touch stays inside the download folder and the extra roots listed above." aria-label="Help" type="button">?</button></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h3>Executables</h3></div>
+              <div class="panel-body">
+                <div class="field"><label>yt-dlp</label><input type="text" id="cfgYtdlp"></div>
+                <div class="field"><label>ffmpeg</label><input type="text" id="cfgFfmpeg"></div>
+                <div class="field"><label>ffprobe</label><input type="text" id="cfgFfprobe"></div>
+                <div class="btns"><button class="btn sm" onclick="showDeps()">Check versions</button>
+                  <button class="btn sm alt" onclick="updateYtdlp()">Update yt-dlp</button></div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="panel">
+              <div class="panel-head"><h3>Behaviour</h3></div>
+              <div class="panel-body">
+                <div class="field"><label>Jobs to run at once</label><input type="number" id="cfgConcurrent" min="1" max="12"></div>
+                <div class="field"><label>Default output template</label><input type="text" id="cfgTemplate"></div>
+                <div class="field"><label>Job history to keep</label><input type="number" id="cfgHistory" min="20" max="5000"></div>
+                <label class="check"><input type="checkbox" id="cfgConfirm"><span>Ask before deleting files</span></label>
+                <label class="check"><input type="checkbox" id="cfgNotify"><span>Toast when a job finishes</span></label>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h3>Appearance</h3></div>
+              <div class="panel-body">
+                <div class="field"><label>Accent</label><div class="chips" id="accentChips"></div></div>
+                <div class="field"><label>Text size <span class="mono" id="fsLabel"></span></label>
+                  <input type="range" id="cfgFont" min="85" max="130" step="5" oninput="applyFontScale(this.value)"></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h3>Storage</h3></div>
+              <div class="panel-body"><div id="diskInfo" class="kv"></div></div>
+            </div>
+            <div class="btns"><button class="btn go" onclick="saveSettings()">Save settings</button></div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
 </body>
 </html>
