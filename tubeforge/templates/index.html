@@ -563,5 +563,85 @@
 
     </main>
 
+    <!-- ── Jump rail ───────────────────────────────────────────────── -->
+    <div id="jumprail" role="group" aria-label="Scroll position">
+      <button class="jump" id="jumpUp" onclick="jumpTo('top')" aria-label="Scroll to top">
+        <span class="arrow">▲</span><span class="jlabel">TOP</span>
+      </button>
+      <button class="jump" id="jumpDown" onclick="jumpTo('bottom')" aria-label="Scroll to bottom">
+        <span class="jlabel">END</span><span class="arrow">▼</span>
+      </button>
+    </div>
+
+    <!-- ── Right rail ──────────────────────────────────────────────── -->
+    <nav id="rail-r">
+      <div class="rail-group">
+        <div class="rail-head">Manage</div>
+        <button class="nav" data-view="library"><span class="ic">▤</span>Library<span class="tool">files on disk</span></button>
+        <button class="nav" data-view="queue"><span class="ic">⧗</span>Queue<span class="count qCount">0</span><span class="tool">all tools</span></button>
+        <button class="nav" data-view="presets"><span class="ic">★</span>Presets<span class="tool">stored locally</span></button>
+      </div>
+      <div class="rail-group">
+        <div class="rail-head">Learn</div>
+        <button class="nav" data-view="reference"><span class="ic">§</span>Reference<span class="tool">yt-dlp + ffmpeg</span></button>
+        <button class="nav" data-view="settings"><span class="ic">⚙</span>Settings<span class="tool">stored locally</span></button>
+      </div>
+      <div class="rail-foot">
+        <b>Shortcuts</b>
+        Ctrl K &nbsp;search<br>
+        Ctrl ⏎ &nbsp;run this screen<br>
+        Ctrl ↑ ↓ &nbsp;top / bottom<br>
+        Home End &nbsp;top / bottom<br>
+        Ctrl ` &nbsp;transport panel
+      </div>
+    </nav>
+  </div>
+
+  <!-- ── Job dock ──────────────────────────────────────────────────── -->
+  <footer id="dock">
+    <div class="dock-bar" onclick="cycleDock(event)">
+      <h3>Transport</h3>
+      <span class="dock-stat" id="dockStat">idle</span>
+      <div class="spacer"></div>
+      <button class="btn sm" onclick="event.stopPropagation();cancelAll()">Cancel running</button>
+      <button class="btn sm" onclick="event.stopPropagation();clearJobs()">Clear finished</button>
+      <button class="btn sm icon" type="button" title="Expand / step up" aria-label="Expand transport dock" id="dockChev">▾</span>
+    </div>
+    <div class="dock-body">
+      <div class="job-list" id="dockJobs"><div class="empty"><b>Nothing queued</b>Jobs you start appear here with live output.</div></div>
+      <div class="job-pane">
+        <div class="job-pane-head"><span id="dockJobTitle">no job selected</span><div class="spacer"></div>
+          <button class="btn sm" onclick="copyText($('#dockLog').innerText)">Copy log</button>
+          <button class="btn sm" onclick="openJobCmd()">Show command</button>
+          <button class="btn sm bad" id="dockCancel" onclick="cancelCurrent()">Cancel</button>
+          <button class="btn sm alt" id="dockRetry" onclick="retryCurrent()">Retry</button></div>
+        <div class="job-log" id="dockLog"></div>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<div class="scrim" id="scrim" hidden onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal">
+    <div class="modal-head"><h3 id="modalTitle"></h3><div class="spacer"></div>
+      <button class="btn sm" onclick="closeModal()">Close</button></div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
+<div class="scrim" id="palScrim" hidden onclick="if(event.target===this)closePalette()">
+  <div class="modal" id="palette" style="width:min(600px,92vw)">
+    <input type="text" id="palInput" placeholder="Jump to a view, run an action, pick an operation…" autocomplete="off">
+    <div class="pal-list" id="palList"></div>
+  </div>
+</div>
+<script defer src="/static/js/core.js"></script>
+<script defer src="/static/js/fetch.js"></script>
+<script defer src="/static/js/lab.js"></script>
+<script defer src="/static/js/inspect_lib.js"></script>
+<script defer src="/static/js/jobs_meta.js"></script>
 </body>
 </html>
