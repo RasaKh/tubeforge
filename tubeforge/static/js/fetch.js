@@ -208,3 +208,277 @@ function renderFormatChips(){
 }
 
 function presetManagedKeys(){
+  const keys = new Set();
+  BOOT.format_presets.forEach(p=>Object.keys(p.sets||{}).forEach(k=>keys.add(k)));
+  return keys;
+}
+
+function applyFormatPreset(i){
+  const p = BOOT.format_presets[i];
+  const sets = p.sets || {};
+  const cleared = [];
+  presetManagedKeys().forEach(k=>{
+    if(!(k in sets) && ytOpts[k]){ delete ytOpts[k]; cleared.push(k); }
+  });
+  ytOpts.format = p.value;
+  Object.entries(sets).forEach(([k,v])=>{ ytOpts[k] = v; });
+  saveLocal(); renderYtOptions(); renderActiveStrip(); renderFormatChips(); syncFetch();
+
+  const added = Object.keys(sets).map(optLabel);
+  const detail = [added.length ? 'on: '+added.join(', ') : '',
+                  cleared.length ? 'off: '+cleared.map(optLabel).join(', ') : '']
+                 .filter(Boolean).join('  \u00b7  ');
+  toast(p.label, detail);
+}
+
+function applyFix(json){
+  const patch = JSON.parse(json);
+  Object.entries(patch).forEach(([k,v])=>{ ytOpts[k] = v; });
+  saveLocal(); renderYtOptions(); renderActiveStrip(); syncFetch();
+  toast('Applied', Object.keys(patch).map(optLabel).join(', '));
+}
+
+function renderTplSummary(){
+  const el = $('#tplSummary'); if(!el) return;
+  const t = ytOpts.output || '';
+  el.textContent = t ? (t.length > 34 ? t.slice(0,33)+'…' : t) : 'default template';
+}
+
+function renderWarnings(list){
+  const host = $('#dlWarnings');
+  if(!list || !list.length){ host.innerHTML = ''; return; }
+  host.innerHTML = list.map(w=>`
+    <div class="note ${w.level==='block'?'':'info'}">
+      <b>${esc(w.text)}</b>
+      ${w.why?`<div style="margin-top:3px;opacity:.85">${esc(w.why)}</div>`:''}
+      ${w.fix?`<div style="margin-top:3px">${esc(w.fix)}</div>`:''}
+      ${w.apply?`<button class="btn sm alt" style="margin-top:7px"
+        onclick='applyFix(${JSON.stringify(JSON.stringify(w.apply)).replace(/'/g,"&#39;")})'>${
+        esc(w.apply_label||'Fix this')}</button>`:''}
+    </div>`).join('');
+}
+
+const syncFetch = debounce(async ()=>{
+  const urls = $('#dlUrls').value.split('\n').filter(u=>u.trim() && !u.trim().startsWith('#'));
+  $('#urlCount').textContent = urls.length ? `${urls.length} link${urls.length>1?'s':''}` : 'no links yet';
+  try{
+    const j = await api('/api/ytdlp/preview', {method:'POST', body:JSON.stringify(fetchSpec())});
+    paintCmd($('#dlCmd'), j.cmd);
+    renderWarnings(j.warnings);
+  }catch(e){ $('#dlCmd').textContent = e.message; }
+  saveLocal();
+}, 200);
+
+async function runFetch(extra){
+  const spec = fetchSpec();
+  if(extra && extra.simulate) spec.opts = Object.assign({}, spec.opts, {simulate:true});
+  if(extra && extra.ignore) spec.ignore_warnings = true;
+  if(!spec.urls.trim()) return toast('Add a link first','Paste at least one URL into Sources.','bad');
+  try{
+    const r = await fetch('/api/ytdlp/run', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(spec)});
+    const j = await r.json();
+    if(r.status === 409 && j.blocked){ showBlocker(j.warnings); return; }
+    if(!r.ok || j.ok === false) throw new Error(j.error || 'Request failed');
+    const n = j.jobs ? j.jobs.length : 1;
+    toast(`Queued ${n} job${n>1?'s':''}`, extra&&extra.simulate?'Simulating — nothing will be written.':'');
+    openDock();
+    if(j.job) selectJob(j.job);
+  }catch(e){ fail(e); }
+}
+
+function showBlocker(warnings){
+  const w = (warnings||[]).find(x=>x.level==='block') || {};
+  modal('This will not work as configured', `
+    <div class="note"><b>${esc(w.text||'')}</b>
+      ${w.why?`<div style="margin-top:6px;opacity:.85">${esc(w.why)}</div>`:''}
+      ${w.fix?`<div style="margin-top:6px">${esc(w.fix)}</div>`:''}</div>`,
+    `${w.apply?`<button class="btn go" onclick='applyFix(${
+      JSON.stringify(JSON.stringify(w.apply)).replace(/'/g,"&#39;")});closeModal()'>${
+      esc(w.apply_label||'Fix this')}</button>`:''}
+     <button class="btn" onclick="closeModal();runFetch({ignore:true})">Download anyway</button>`);
+}
+
+async function pasteUrls(){
+  try{
+    const t = await navigator.clipboard.readText();
+    const box = $('#dlUrls');
+    box.value = (box.value.trim() ? box.value.replace(/\s*$/,'\n') : '') + t.trim();
+    syncFetch();
+  }catch(e){ toast('Clipboard unavailable','Your browser blocked the read. Paste with Ctrl+V instead.','bad'); }
+}
+
+function goFormats(){
+  const first = $('#dlUrls').value.split('\n').find(u=>u.trim() && !u.trim().startsWith('#'));
+  if(first) $('#fmtUrl').value = first.trim();
+  show('formats');
+  if(first) loadFormats();
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   FORMATS
+   ══════════════════════════════════════════════════════════════════════ */
+async function loadFormats(flat){
+  const url = $('#fmtUrl').value.trim();
+  if(!url) return toast('Add a link first','Paste the URL you want to inspect.','bad');
+  $('#fmtInfo').innerHTML = '<div class="empty"><b>Asking the site…</b>This can take a few seconds.</div>';
+  $('#fmtTable').innerHTML = '';
+  try{
+    const j = await api('/api/ytdlp/info', {method:'POST', body:JSON.stringify({url, flat:!!flat})});
+    if(j.kind === 'playlist'){ renderPlaylist(j); return; }
+    fmtState.rows = j.formats; fmtState.sel = new Set(); fmtState.info = j.info;
+    renderVideoInfo(j.info); $('#fmtFilters').hidden = false; renderFormats();
+  }catch(e){ $('#fmtInfo').innerHTML = `<div class="note">${esc(e.message)}</div>`; }
+}
+
+function renderVideoInfo(i){
+  $('#fmtInfo').innerHTML = `
+    <div class="panel"><div class="panel-body" style="display:grid;grid-template-columns:auto 1fr;gap:16px">
+      ${i.thumbnail?`<img src="${esc(i.thumbnail)}" style="width:260px;border-radius:4px;border:1px solid var(--seam)">`:''}
+      <div>
+        <h2 style="font-size:1rem;margin-bottom:7px">${esc(i.title||'Untitled')}</h2>
+        <dl class="kv">
+          <dt>Channel</dt><dd>${esc(i.uploader||'—')}</dd>
+          <dt>Duration</dt><dd>${esc(i.duration_h||'—')}</dd>
+          <dt>Uploaded</dt><dd>${esc(i.upload_date||'—')}</dd>
+          <dt>Views</dt><dd>${i.view_count!=null?Number(i.view_count).toLocaleString():'—'}</dd>
+          <dt>Source</dt><dd>${esc(i.extractor||'—')}${i.is_live?' · live':''}</dd>
+          <dt>Chapters</dt><dd>${(i.chapters||[]).length}</dd>
+          <dt>Subtitles</dt><dd>${(i.subtitles||[]).join(', ')||'none'}</dd>
+          <dt>Auto captions</dt><dd>${(i.auto_captions||[]).slice(0,14).join(', ')||'none'}</dd>
+        </dl>
+        <div class="btns" style="margin-top:10px">
+          <button class="btn sm" data-act="fmtToFetch">Send to Fetch</button>
+          ${(i.chapters||[]).length?`<button class="btn sm alt" data-act="fmtChapters">View chapters</button>`:''}
+        </div>
+      </div></div></div>`;
+}
+
+function showChapters(){
+  const ch = (fmtState.info.chapters||[]);
+  modal('Chapters', `<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Start</th><th>End</th><th>Title</th></tr></thead>
+    <tbody>${ch.map((c,n)=>`<tr><td class="num">${n+1}</td><td class="mono">${fmtDur(c.start_time)}</td>
+    <td class="mono">${fmtDur(c.end_time)}</td><td>${esc(c.title||'')}</td></tr>`).join('')}</tbody></table></div>`);
+}
+
+function renderPlaylist(j){
+  $('#fmtFilters').hidden = true;
+  $('#fmtInfo').innerHTML = `<div class="panel"><div class="panel-head"><h3>${esc(j.title||'Playlist')}</h3>
+    <span class="hint">${j.count} entries</span><div class="spacer"></div>
+    <button class="btn sm alt" data-act="plSelToFetch">Send selected to Fetch</button>
+    <button class="btn sm" data-act="plAllToFetch">Send all to Fetch</button></div></div>`;
+  window._pl = j.entries;
+  window._plSel = new Set();
+  $('#fmtTable').innerHTML = `<div class="tbl-wrap"><table><thead><tr><th></th><th>#</th><th>Title</th><th>Channel</th><th>Length</th><th></th></tr></thead>
+    <tbody>${j.entries.map((e,n)=>`<tr>
+      <td><input type="checkbox" data-act="plToggle" data-i="${n}"></td>
+      <td class="num">${n+1}</td><td>${esc(e.title||e.id)}</td>
+      <td>${esc(e.uploader||'')}</td><td class="mono">${esc(e.duration_h||'')}</td>
+      <td><button class="btn sm" data-act="plOneToFetch" data-i="${n}">Fetch</button></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+function playlistToFetch(onlySelected){
+  const entries = window._pl || [];
+  const chosen = onlySelected
+    ? entries.filter((_, i) => window._plSel && window._plSel.has(i))
+    : entries;
+  if(onlySelected && !chosen.length) return toast('Nothing selected', 'Tick playlist entries first.', 'bad');
+  $('#dlUrls').value = chosen.map(e=>e.url).filter(Boolean).join('\n');
+  show('fetch'); syncFetch();
+}
+
+on('fmtFilter', (d, el)=>{
+  $$('#fmtFilters .chip').forEach(c=>c.classList.remove('on'));
+  el.classList.add('on'); fmtState.filter = d.k; renderFormats();
+});
+on('fmtSort',  d=>fmtSort(d.k));
+on('fmtPick',  d=>{ const r = (fmtState.view||[])[+d.i]; if(r) toggleFmt(r.format_id); });
+on('fmtToFetch', ()=>{ $('#dlUrls').value = (fmtState.info||{}).webpage_url || ''; show('fetch'); syncFetch(); });
+on('fmtChapters', ()=>showChapters());
+on('plAllToFetch', ()=>playlistToFetch(false));
+on('plSelToFetch', ()=>playlistToFetch(true));
+on('plToggle', d=>{
+  window._plSel = window._plSel || new Set();
+  const idx = +d.i;
+  window._plSel.has(idx) ? window._plSel.delete(idx) : window._plSel.add(idx);
+});
+on('plOneToFetch', d=>{ $('#dlUrls').value = (window._pl||[])[+d.i].url || ''; show('fetch'); syncFetch(); });
+function fmtSort(key){
+  if(fmtState.sort===key) fmtState.desc = !fmtState.desc; else { fmtState.sort=key; fmtState.desc=true; }
+  renderFormats();
+}
+function renderFormats(){
+  let rows = fmtState.rows.slice();
+  if(fmtState.filter!=='all') rows = rows.filter(r=>r.kind===fmtState.filter);
+  const k = fmtState.sort;
+  rows.sort((a,b)=>{ const x=a[k]??0, y=b[k]??0;
+    return (typeof x==='string'? String(x).localeCompare(String(y)) : x-y) * (fmtState.desc?-1:1); });
+  fmtState.view = rows;
+  const cols = [['format_id','ID'],['ext','Ext'],['kind','Type'],['resolution','Resolution'],
+    ['fps','FPS'],['vcodec','Video'],['acodec','Audio'],['tbr','kbps'],['filesize','Size'],
+    ['dynamic_range','HDR'],['protocol','Protocol'],['format_note','Note']];
+  $('#fmtTable').innerHTML = `<div class="tbl-wrap"><table><thead><tr><th></th>${
+    cols.map(c=>`<th class="${fmtState.sort===c[0]?'sorted':''}" data-act="fmtSort" data-k="${c[0]}">${c[1]}</th>`).join('')
+  }</tr></thead><tbody>${rows.map((r,ri)=>`
+    <tr class="${fmtState.sel.has(r.format_id)?'picked':''}" data-act="fmtPick" data-i="${ri}">
+      <td><input type="checkbox" ${fmtState.sel.has(r.format_id)?'checked':''} data-act="fmtPick" data-i="${ri}" data-stop="1"></td>
+      <td class="mono">${esc(r.format_id)}</td><td>${esc(r.ext||'')}</td>
+      <td><span class="tag ${r.kind}">${esc(r.kind)}</span></td>
+      <td class="mono">${esc(r.resolution||'—')}</td><td class="num">${r.fps||''}</td>
+      <td class="mono">${esc((r.vcodec||'').split('.')[0])}</td>
+      <td class="mono">${esc((r.acodec||'').split('.')[0])}</td>
+      <td class="num">${r.tbr?Math.round(r.tbr):''}</td>
+      <td class="num">${esc(r.filesize_h||'')}</td>
+      <td>${esc(r.dynamic_range||'')}</td><td>${esc(r.protocol||'')}</td>
+      <td class="muted">${esc(r.format_note||'')}</td></tr>`).join('')}</tbody></table></div>`;
+  updateFmtPick();
+}
+function sortedFmtIds(){
+  const order = { video: 0, both: 1, audio: 2 };
+  return Array.from(fmtState.sel).sort((a, b) => {
+    const ra = fmtState.rows.find(r => r.format_id === a) || {};
+    const rb = fmtState.rows.find(r => r.format_id === b) || {};
+    return (order[ra.kind] ?? 3) - (order[rb.kind] ?? 3);
+  });
+}
+function toggleFmt(id){
+  fmtState.sel.has(id) ? fmtState.sel.delete(id) : fmtState.sel.add(id);
+  renderFormats();
+}
+function updateFmtPick(){
+  const ids = sortedFmtIds();
+  if(!ids.length){ $('#fmtPick').textContent = 'nothing selected'; return; }
+  const totalBytes = ids.reduce((sum, id) => {
+    const r = fmtState.rows.find(x => x.format_id === id);
+    return sum + (r && r.filesize ? Number(r.filesize) : 0);
+  }, 0);
+  const sizeTxt = totalBytes > 0 ? ` (~${(totalBytes / 1048576).toFixed(1)} MB)` : '';
+  $('#fmtPick').textContent = ids.join('+') + sizeTxt;
+}
+function useSelectedFormats(){
+  if(!fmtState.sel.size) return toast('Nothing selected','Tick the rows you want first.','bad');
+  const ids = sortedFmtIds();
+  ytOpts.format = ids.join('+');
+  const selectedRows = ids.map(id => fmtState.rows.find(r => r.format_id === id)).filter(Boolean);
+  if(selectedRows.length && selectedRows.every(r => r.kind === 'audio')){
+    ytOpts.extract_audio = true;
+  } else if(selectedRows.some(r => r.kind === 'video' || r.kind === 'both')){
+    delete ytOpts.extract_audio;
+  }
+
+  // Format IDs like "137+140" belong to the video they were read from — they
+  // mean nothing on any other link. So the URL box is set to that video rather
+  // than left holding whatever was there before.
+  const url = (fmtState.info || {}).webpage_url || $('#fmtUrl').value.trim();
+  let replaced = false;
+  if(url){
+    const existing = $('#dlUrls').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    replaced = existing.length > 0 && !(existing.length === 1 && existing[0] === url);
+    $('#dlUrls').value = url;
+  }
+  show('fetch'); renderYtOptions(); renderActiveStrip(); renderFormatChips(); syncFetch();
+  toast('Format applied', replaced
+    ? `${ytOpts.format} — the link was replaced, since these IDs only apply to that video`
+    : ytOpts.format);
+}
+
