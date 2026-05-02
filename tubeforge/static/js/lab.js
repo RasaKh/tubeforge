@@ -358,3 +358,168 @@ function audioPanel(spec, opt){
     <select onchange="setEnc('aapplication',this.value)">${opt(spec.applications, e.aapplication)}</select>
     <p class="help">"voip" favours speech intelligibility, "lowdelay" cuts latency.</p></div>`);
   if(spec.frame_durations) extras.push(`<div class="field"><label>Frame duration (ms)</label>
+    <select onchange="setEnc('aframe_duration',this.value)">${opt(spec.frame_durations, e.aframe_duration)}</select></div>`);
+  if(spec.sample_fmts) extras.push(`<div class="field"><label>Sample format</label>
+    <select onchange="setEnc('asample_fmt',this.value)">${opt(spec.sample_fmts, e.asample_fmt)}</select></div>`);
+
+  return `
+    <div class="sep"></div>
+    <div class="lbl" style="margin-bottom:8px">Audio · ${esc(spec.label||'')}</div>
+    ${modeChips}
+    <div class="cols-3">${control}${effort}</div>
+    <div class="cols-3">
+      <div class="field"><label>Sample rate</label>
+        <select onchange="setEnc('ar',this.value)">${opt([''].concat((labAudioCaps.codec===e.acodec && labAudioCaps.sample_rates) || spec.sample_rates || BOOT.sample_rates.filter(Boolean)), e.ar, 'Auto')}</select>
+        ${['libopus','opus'].includes(e.acodec)?'<p class="help">Opus input rates: 8, 12, 16, 24 or 48 kHz (native: 48 kHz). Playback/probe commonly reports 48 kHz.</p>':''}</div>
+      <div class="field"><label>Channels</label>
+        <select onchange="setEnc('ac',this.value)">${opt([''].concat(['libmp3lame','opus'].includes(e.acodec)?['1','2']:['1','2','3','4','5','6','7','8']), e.ac)}</select></div>
+      <div class="field"><label>Channel layout</label>
+        <select onchange="setEnc('achannel_layout',this.value)">${opt([''].concat((labAudioCaps.codec===e.acodec && labAudioCaps.channel_layouts) || (['libmp3lame','opus'].includes(e.acodec)?['mono','stereo']:BOOT.channel_layouts.filter(Boolean))), e.achannel_layout)}</select></div>
+      ${extras.join('')}
+      <div class="field"><label>Low-pass cutoff (Hz)</label>
+        <input type="number" value="${esc(e.acutoff||'')}" placeholder="e.g. 20000"
+          oninput="setEnc('acutoff',this.value)">
+        <p class="help">Discards everything above this. Leave blank to let the encoder decide.</p></div>
+      <div class="field"><label>Extra audio arguments</label>
+        <input type="text" value="${esc(e.aextra||'')}" placeholder="-aac_coder twoloop"
+          oninput="setEnc('aextra',this.value)"></div>
+    </div>`;
+}
+
+on('encArc', d=>{ lab.enc.arc_mode = d.m; renderEncoder(); syncLab(); });
+on('encAbr', d=>{ lab.enc.abitrate = d.v; renderEncoder(); syncLab(); });
+
+function renderEncoder(){
+  const v = lab.enc.vcodec || '';
+  const a = lab.enc.acodec || '';
+  const vs = BOOT.video_encoders.find(e=>e.id===v);
+  const rcModes = (vs && vs.rc) ? vs.rc : [];
+  const opt = (arr, sel, blank='— not set —') => (arr||[]).map(c=>
+    `<option value="${esc(c)}" ${String(c)===String(sel)?'selected':''}>${esc(c===''?blank:c)}</option>`).join('');
+  $('#encForm').innerHTML = `
+    <div class="cols-3">
+      <div class="field" ${labAudioOnly?'style="display:none"':''}><label>Video codec</label><select onchange="setEnc('vcodec',this.value)">
+        <option value="">— leave to ffmpeg —</option>
+        ${BOOT.video_encoders.map(e=>`<option value="${e.id}" ${e.id===v?'selected':''}>${esc(e.label)}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Audio codec</label><select onchange="setEnc('acodec',this.value)">
+        <option value="">— leave to ffmpeg —</option>
+        ${BOOT.audio_encoders.filter(e=>!e.hidden).map(e=>`<option value="${e.id}" ${e.id===a?'selected':''}>${esc(e.label)}</option>`).join('')}
+      </select></div>
+      <div class="field" ${labAudioOnly?'style="display:none"':''}><label>Subtitle codec</label><select onchange="setEnc('scodec',this.value)">
+        ${opt([''].concat(BOOT.subtitle_codecs), lab.enc.scodec)}</select></div>
+    </div>
+    ${(vs && v!=='copy' && !labAudioOnly) ? `
+    <div class="sep"></div>
+    ${labProbe.duration ? `<div class="inline" style="margin-bottom:8px;flex-wrap:wrap;gap:6px">
+      <span class="lbl" style="margin:0">Fit to:</span>
+      ${[8, 10, 25, 50, 100].map(mb => `<button class="chip" onclick="fitTargetSize(${mb})">${mb} MB</button>`).join('')}
+    </div>` : ''}
+    <div class="cols-3">
+      ${rcModes.length?`<div class="field"><label>Rate control</label><select onchange="setEnc('rc_mode',this.value)">
+        ${opt(rcModes.filter(x=>x!=='twopass'), lab.enc.rc_mode||rcModes[0],'')}</select></div>`:''}
+      <div class="field" ${!rcModes.length || lab.enc.rc_mode==='bitrate'?'style="display:none"':''}><label>Quality ${vs.crf_range?`(${vs.crf_range[0]}–${vs.crf_range[1]}, lower is better)`:''}</label>
+        <input type="number" value="${esc(lab.enc.crf ?? (vs.crf_default ?? ''))}" oninput="setEnc('crf',this.value)"></div>
+      <div class="field"><label>Target bitrate</label>
+        <input type="text" value="${esc(lab.enc.vbitrate||'')}" placeholder="5M" oninput="setEnc('vbitrate',this.value)"></div>
+      ${vs.presets?`<div class="field"><label>Speed preset</label><select onchange="setEnc('preset',this.value)">
+        ${opt([''].concat(vs.presets), lab.enc.preset)}</select></div>`:''}
+      ${vs.tunes?`<div class="field"><label>Tune</label><select onchange="setEnc('tune',this.value)">
+        ${opt(vs.tunes, lab.enc.tune)}</select></div>`:''}
+      ${vs.profiles?`<div class="field"><label>Profile</label><select onchange="setEnc('profile',this.value)">
+        ${opt(vs.profiles, lab.enc.profile)}</select></div>`:''}
+      <div class="field"><label>Pixel format</label><select onchange="setEnc('pix_fmt',this.value)">
+        ${opt(['','yuv420p','yuv422p','yuv444p','yuv420p10le','yuv422p10le','nv12','p010le'], lab.enc.pix_fmt)}</select></div>
+      <div class="field"><label>Max rate</label><input type="text" value="${esc(lab.enc.maxrate||'')}" placeholder="8M" oninput="setEnc('maxrate',this.value)"></div>
+      <div class="field"><label>Buffer size</label><input type="text" value="${esc(lab.enc.bufsize||'')}" placeholder="16M" oninput="setEnc('bufsize',this.value)"></div>
+      <div class="field"><label>Keyframe interval</label><input type="number" value="${esc(lab.enc.gop||'')}" placeholder="250" oninput="setEnc('gop',this.value)"></div>
+      <div class="field"><label>B-frames</label><input type="number" value="${esc(lab.enc.bframes||'')}" oninput="setEnc('bframes',this.value)"></div>
+      <div class="field"><label>Threads</label><input type="number" value="${esc(lab.enc.threads||'')}" placeholder="0 = auto" oninput="setEnc('threads',this.value)"></div>
+      ${(vs.family==='x264'||vs.family==='x265')?`<div class="field"><label>${vs.family} params</label>
+        <input type="text" value="${esc(lab.enc.x_params||'')}" placeholder="aq-mode=3:psy-rd=1.0" oninput="setEnc('x_params',this.value)"></div>`:''}
+    </div>` : ''}
+    ${(a && a!=='copy') ? audioPanel(_enc(a, BOOT.audio_encoders), opt) : ''}
+    <div class="sep"></div>
+    <div class="checks">
+      ${lab.op==='transcode' && !labAudioOnly && vs && ['x264','x265','vpx','mpeg'].includes(vs.family) ? checkWithHint(`<label class="check ${lab.enc.twopass?'on':''}"><input type="checkbox" ${lab.enc.twopass?'checked':''} onchange="setEnc('twopass',this.checked)">
+        <span>Two-pass encode</span></label>`, 'Two-pass encode', 'Encodes once to measure the material, then again to spend the bits where they matter. Needs a target bitrate, and only software encoders support it. Takes about twice as long.') : ''}
+      ${checkWithHint(`<label class="check ${lab.enc.faststart?'on':''}"><input type="checkbox" ${lab.enc.faststart?'checked':''} onchange="setEnc('faststart',this.checked)">
+        <span>Web-optimise MP4</span></label>`, 'Web-optimise MP4', 'Moves the index to the front of the file so playback can start before the download finishes. Only applies to the MP4 family.')}
+      <label class="check ${lab.enc.shortest?'on':''}"><input type="checkbox" ${lab.enc.shortest?'checked':''} onchange="setEnc('shortest',this.checked)">
+        <span>Stop at the shortest input</span></label>
+    </div>
+    <div class="field" style="margin-top:9px"><label>Extra output arguments</label>
+      <input type="text" value="${esc(lab.enc.extra_out||'')}" placeholder="-map_metadata 0 -tag:v hvc1" oninput="setEnc('extra_out',this.value)"></div>`;
+  const aspec = _enc(a, BOOT.audio_encoders);
+  const amode = (aspec.arc||[]).includes(lab.enc.arc_mode) ? lab.enc.arc_mode : (aspec.arc||[])[0];
+  const abit = amode === 'bitrate' ? (lab.enc.abitrate || aspec.abr_default || '')
+             : amode === 'quality' ? ('q' + (lab.enc.aq ?? aspec.q_default ?? ''))
+             : amode === 'vbr' ? ('vbr' + (lab.enc.avbr ?? aspec.vbr_default ?? ''))
+             : amode === 'compression' ? ('c' + (lab.enc.acompression ?? aspec.compression_default ?? ''))
+             : '';
+  const bits = [v||'auto', a||'auto', lab.enc.crf!=null&&v&&v!=='copy'?('q'+lab.enc.crf):'',
+                lab.enc.preset||'', abit];
+  $('#encSummary').textContent = bits.filter(Boolean).join(' · ');
+}
+
+function renderContainerChips(){
+  const cur = (lab.output.match(/\.([^.]+)$/)||[])[1];
+  $('#containerChips').innerHTML = (labContainerOptions.length?labContainerOptions:BOOT.containers).map(c=>
+    `<button class="chip mono ${c===cur?'on':''}" data-act="setContainer" data-c="${esc(c)}">.${c}</button>`).join('');
+}
+const CONTAINER_DEFAULT_CODECS = {
+  webm: { vcodec: 'libvpx-vp9', acodec: 'libopus' },
+  mp4:  { vcodec: 'libx264',    acodec: 'aac' },
+  m4v:  { vcodec: 'libx264',    acodec: 'aac' },
+  mov:  { vcodec: 'libx264',    acodec: 'aac' },
+  mkv:  { vcodec: 'libx264',    acodec: 'aac' },
+  avi:  { vcodec: 'mpeg4',      acodec: 'libmp3lame' },
+  flv:  { vcodec: 'libx264',    acodec: 'aac' },
+  ts:   { vcodec: 'libx264',    acodec: 'aac' },
+  mxf:  { vcodec: 'dnxhd',      acodec: 'pcm_s16le' },
+  gif:  { op: 'gif' },
+  webp: { op: 'webp' },
+  png:  { op: 'screenshot' },
+  jpg:  { op: 'screenshot' },
+};
+const AUDIO_CONTAINER_CODECS = {
+  mp3:'libmp3lame', m4a:'aac', aac:'aac', opus:'libopus', ogg:'libvorbis',
+  flac:'flac', wav:'pcm_s16le', aiff:'pcm_s16le', ac3:'ac3', eac3:'eac3', thd:'truehd'
+};
+
+function fitTargetSize(targetMB){
+  const clipDur = Math.max(1, Number(labProbe.duration) || 60);
+  const audioKbps = parseInt(lab.enc.abitrate, 10) || 128;
+  const vKbps = Math.max(100, Math.floor((targetMB * 8192 * 0.95) / clipDur - audioKbps));
+  lab.enc.vbitrate = vKbps + 'k';
+  lab.enc.rc_mode = 'bitrate';
+  delete lab.enc.crf;
+  const vs = BOOT.video_encoders.find(e => e.id === lab.enc.vcodec);
+  if(lab.op === 'transcode' && vs && ['x264','x265','vpx','mpeg'].includes(vs.family)){
+    lab.enc.twopass = true;
+  }
+  renderEncoder(); syncLab();
+  toast(`Target ${targetMB} MB`, `Video bitrate set to ${lab.enc.vbitrate}`);
+}
+
+function setContainer(ext){
+  const base = (lab.output || 'output').replace(/\.[^.]+$/, '');
+  lab.output_mode = 'manual';
+
+  if(AUDIO_CONTAINER_CODECS[ext]){
+    if(!['audio_convert', 'extract_audio'].includes(lab.op) && lab.op === 'transcode'){
+      lab.op = 'audio_convert';
+      labAudioOnly = true;
+    }
+    if(['audio_convert', 'extract_audio'].includes(lab.op) || labAudioOnly){
+      AUDIO_ONLY_KEYS.forEach(k => delete lab.enc[k]);
+      lab.enc.acodec = AUDIO_CONTAINER_CODECS[ext];
+    }
+  } else if(CONTAINER_DEFAULT_CODECS[ext]){
+    const def = CONTAINER_DEFAULT_CODECS[ext];
+    if(def.op && lab.op === 'transcode'){
+      pickOp(def.op);
+      return;
+    }
+    if(opMeta().enc && !labAudioOnly){
+      if(ext === 'webm' && !['libvpx-vp9','libvpx','libsvtav1','libaom-av1','librav1e','av1_nvenc','av1_vaapi','copy'].includes(lab.enc.vcodec)){
