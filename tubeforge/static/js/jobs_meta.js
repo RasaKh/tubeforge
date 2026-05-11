@@ -153,3 +153,243 @@ async function loadJobHistory(){
       </tbody></table></div>`;
   }catch(e){ fail(e); }
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+   HISTORY / PRESETS / SETTINGS
+   ══════════════════════════════════════════════════════════════════════ */
+async function loadHistory(){
+  try{ const j = await api('/api/history'); historyRows = j.history; renderHistory(); }catch(e){ fail(e); }
+}
+on('histFetch',   d=>{ $('#dlUrls').value = histView[+d.i].url; show('fetch'); syncFetch(); });
+on('histFormats', d=>{ $('#fmtUrl').value = histView[+d.i].url; show('formats'); loadFormats(); });
+
+let histView = [];
+function renderHistory(){
+  const q = ($('#histSearch').value||'').toLowerCase();
+  const rows = historyRows.filter(r=>!q || (r.url+' '+(r.title||'')).toLowerCase().includes(q));
+  histView = rows;
+  $('#histList').innerHTML = rows.length ? `<div class="panel"><div class="panel-body" style="padding:0">
+    ${rows.map((r,ri)=>`<div class="listrow">
+      <span class="fname" title="${esc(r.url)}">${esc(r.title||r.url)}</span>
+      <span class="fmeta">${esc(r.uploader||'')}</span>
+      <span class="fmeta">${new Date(r.ts*1000).toLocaleDateString()}</span>
+      <span class="facts">
+        <button class="btn sm" data-act="histFetch" data-i="${ri}">Fetch</button>
+        <button class="btn sm alt" data-act="histFormats" data-i="${ri}">Formats</button>
+        <button class="btn sm bad icon" data-act="histDel" data-id="${r.id}">×</button>
+      </span></div>`).join('')}</div></div>`
+    : `<div class="empty"><b>Nothing yet</b>Links you fetch or probe are remembered here.</div>`;
+}
+on('histDel', async d=>{ await api('/api/history?id='+d.id, {method:'DELETE'}); loadHistory(); });
+async function clearHistory(){ if(!confirm('Clear the whole URL history?')) return;
+  await api('/api/history',{method:'DELETE'}); loadHistory(); }
+
+async function savePreset(kind){
+  const name = prompt('Name this preset'); if(!name) return;
+  let data;
+  if(kind==='ytdlp') data = {opts:ytOpts};
+  else if(kind==='filters') data = chains;
+  else data = {op:lab.op, params:lab.params, enc:lab.enc, hwaccel:$('#ffHw').value, vfilters:chains.video, afilters:chains.audio};
+  try{ await api('/api/presets',{method:'POST',body:JSON.stringify({kind,name,data})});
+    toast('Preset saved', name); }catch(e){ fail(e); }
+}
+async function loadPresets(){
+  try{
+    const j = await api('/api/presets');
+    const byKind = {};
+    presetIndex = {};
+    j.presets.forEach(p=>{ (byKind[p.kind]=byKind[p.kind]||[]).push(p); presetIndex[p.id]=p; });
+    const titles = {ytdlp:'Download presets', ffmpeg:'Operation presets', filters:'Filter chains'};
+    $('#presetList').innerHTML = Object.keys(byKind).length ? Object.keys(byKind).map(k=>`
+      <div class="panel"><div class="panel-head"><h3>${esc(titles[k]||k)}</h3></div>
+      <div class="panel-body" style="padding:0">${byKind[k].map(p=>`
+        <div class="listrow"><span class="fname">${esc(p.name)}</span>
+          <span class="fmeta">${new Date(p.created*1000).toLocaleDateString()}</span>
+          <span class="facts">
+            <button class="btn sm" data-act="presetApply" data-id="${p.id}">Apply</button>
+            <button class="btn sm bad" data-act="presetDel" data-id="${p.id}">Delete</button></span>
+        </div>`).join('')}</div></div>`).join('')
+      : `<div class="empty"><b>No presets yet</b>Configure something, then press Save preset.</div>`;
+  }catch(e){ fail(e); }
+}
+let presetIndex = {};
+on('presetApply', d=>{ const p = presetIndex[d.id]; if(p) applyPreset(p.kind, p.data); });
+on('presetDel',   d=>delPreset(d.id));
+
+function applyPreset(kind, d){
+  if(kind==='ytdlp'){ ytOpts = d.opts||{};
+    show('fetch'); renderYtOptions(); renderActiveStrip(); syncFetch(); }
+  else if(kind==='filters'){ chains = {video:d.video||[], audio:d.audio||[]}; show('filters'); renderChains(); }
+  else { lab.op=d.op; lab.params=d.params||{}; lab.enc=d.enc||{};
+    if(d.hwaccel !== undefined) $('#ffHw').value = d.hwaccel;
+    if(d.vfilters || d.afilters) chains = {video:d.vfilters||[], audio:d.afilters||[]};
+    lab.output_mode = 'auto';
+    lab.output = lab.inputs[0] ? suggestedOutput(lab.inputs[0], lab.op) : '';
+    $('#labOut').value = lab.output; show('lab'); renderLab(); }
+  toast('Preset applied');
+}
+async function delPreset(id){ await api('/api/presets?id='+id,{method:'DELETE'}); loadPresets(); }
+
+async function showDeps(){
+  try{
+    const j = await api('/api/deps');
+    modal('Tools', `<dl class="kv">${Object.entries(j.deps).map(([k,v])=>
+      `<dt>${esc(k)}</dt><dd>${v.found
+        ? esc(v.version||'').slice(0,120)+`<br><span class="muted">${esc(v.path)}</span>`
+        : '<span style="color:var(--fault)">not found on PATH</span>'}</dd>`).join('')}</dl>`,
+      `<button class="btn alt" onclick="updateYtdlp()">Update yt-dlp</button>`);
+  }catch(e){ fail(e); }
+}
+async function updateYtdlp(){
+  try{ const j = await api('/api/ytdlp/update',{method:'POST'});
+    closeModal(); openDock(); selectJob(j.job); }catch(e){ fail(e); }
+}
+async function loadDisk(){
+  try{
+    const j = await api('/api/disk');
+    if(!j.ok) return;
+    $('#diskInfo').innerHTML = `<dt>Free</dt><dd>${esc(j.free_h)}</dd>
+      <dt>This folder</dt><dd>${esc(j.folder_h)}</dd>
+      <dt>Disk total</dt><dd>${fmtBytes(j.total)}</dd>`;
+  }catch(e){}
+}
+function fillSettings(){
+  const c = BOOT.config;
+  $('#cfgDir').value = c.download_dir; $('#cfgRoots').value = (c.extra_roots||[]).join('\n');
+  $('#cfgSandbox').checked = c.sandbox_paths; $('#cfgYtdlp').value = c.ytdlp_bin;
+  $('#cfgFfmpeg').value = c.ffmpeg_bin; $('#cfgFfprobe').value = c.ffprobe_bin;
+  $('#cfgConcurrent').value = c.max_concurrent_jobs; $('#cfgTemplate').value = c.default_output_template;
+  $('#cfgHistory').value = c.keep_job_history; $('#cfgConfirm').checked = c.confirm_destructive;
+  $('#cfgNotify').checked = c.notify_on_finish;
+  setText('#confPath', BOOT.paths.conf_dir + '/config.json');
+  setText('#pathChip', c.download_dir);
+  const accents = ['#ff6b35','#35d6b0','#5aa9f8','#f5a623','#be8cff','#ff4d5e','#d0d4da'];
+  setHTML('#accentChips', accents.map(a=>
+    `<button class="chip" style="border-color:${a};color:${a}" data-act="setAccent" data-a="${esc(a)}">${a}</button>`).join(''));
+}
+function setAccent(a){
+  document.documentElement.style.setProperty('--tally', a);
+  try{ localStorage.setItem('tf_accent', a); }catch(e){}
+}
+async function saveSettings(){
+  const cfg = {
+    download_dir:$('#cfgDir').value.trim(),
+    extra_roots:$('#cfgRoots').value.split('\n').map(s=>s.trim()).filter(Boolean),
+    sandbox_paths:$('#cfgSandbox').checked, ytdlp_bin:$('#cfgYtdlp').value.trim(),
+    ffmpeg_bin:$('#cfgFfmpeg').value.trim(), ffprobe_bin:$('#cfgFfprobe').value.trim(),
+    max_concurrent_jobs:Number($('#cfgConcurrent').value)||2,
+    default_output_template:$('#cfgTemplate').value,
+    keep_job_history:Number($('#cfgHistory').value)||500,
+    confirm_destructive:$('#cfgConfirm').checked, notify_on_finish:$('#cfgNotify').checked
+  };
+  try{ const j = await api('/api/config',{method:'POST',body:JSON.stringify({config:cfg})});
+    BOOT.config = j.config; fillSettings(); toast('Settings saved'); loadDisk();
+  }catch(e){ fail(e); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   REFERENCE
+   ══════════════════════════════════════════════════════════════════════ */
+const RECIPES = [
+  ['yt-dlp · everyday', [
+    ['Best quality, merged','yt-dlp -f "bestvideo*+bestaudio/best" --merge-output-format mkv URL'],
+    ['1080p MP4 that plays anywhere','yt-dlp -S "res:1080,vcodec:h264,acodec:aac" --merge-output-format mp4 URL'],
+    ['MP3 at best quality','yt-dlp -x --audio-format mp3 --audio-quality 0 --embed-thumbnail --embed-metadata URL'],
+    ['Everything embedded','yt-dlp --embed-subs --embed-thumbnail --embed-metadata --embed-chapters URL'],
+    ['Subtitles only (SRT)','yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs "en.*" --convert-subs srt URL'],
+    ['Whole channel, newest first','yt-dlp -I 1:20 --download-archive seen.txt "https://www.youtube.com/@handle/videos"'],
+  ]],
+  ['yt-dlp · precision', [
+    ['Just one section','yt-dlp --download-sections "*00:01:30-00:04:00" --force-keyframes-at-cuts URL'],
+    ['Skip sponsors entirely','yt-dlp --sponsorblock-remove sponsor,selfpromo,interaction URL'],
+    ['Split into chapter files','yt-dlp --split-chapters -o "chapter:%(title)s/%(section_number)02d %(section_title)s.%(ext)s" URL'],
+    ['Live stream from start','yt-dlp --live-from-start --wait-for-video 15 URL'],
+    ['Resume & retry reliably','yt-dlp -c -R infinite --fragment-retries infinite --concurrent-fragments 4 URL'],
+    ['Use browser cookies','yt-dlp --cookies-from-browser firefox URL'],
+    ['Throttle and be polite','yt-dlp -r 2M --sleep-interval 5 --max-sleep-interval 15 URL'],
+    ['Only videos over ten minutes','yt-dlp --match-filters "duration > 600" URL'],
+  ]],
+  ['ffmpeg · encode', [
+    ['Solid H.264 default','ffmpeg -i in.mkv -c:v libx264 -crf 20 -preset slow -c:a aac -b:a 192k out.mp4'],
+    ['Small HEVC','ffmpeg -i in.mkv -c:v libx265 -crf 26 -preset medium -tag:v hvc1 -c:a copy out.mp4'],
+    ['AV1, patient','ffmpeg -i in.mkv -c:v libsvtav1 -crf 32 -preset 6 -c:a libopus -b:a 128k out.mkv'],
+    ['NVIDIA hardware encode','ffmpeg -hwaccel cuda -i in.mkv -c:v hevc_nvenc -preset p6 -cq 26 -c:a copy out.mp4'],
+    ['VA-API hardware encode (Linux)','ffmpeg -vaapi_device /dev/dri/renderD128 -i in.mkv -vf "format=nv12,hwupload" -c:v h264_vaapi -qp 22 -c:a copy out.mp4'],
+    ['Two-pass target bitrate','ffmpeg -y -i in.mp4 -c:v libx264 -b:v 1800k -pass 1 -an -f null /dev/null && ffmpeg -i in.mp4 -c:v libx264 -b:v 1800k -pass 2 -c:a aac -b:a 128k out.mp4'],
+    ['Web-ready MP4','ffmpeg -i in.mov -c:v libx264 -crf 22 -pix_fmt yuv420p -movflags +faststart out.mp4'],
+  ]],
+  ['ffmpeg · cut & join', [
+    ['Instant cut, no re-encode','ffmpeg -ss 00:01:00 -i in.mp4 -t 30 -c copy out.mp4'],
+    ['Frame-accurate cut','ffmpeg -i in.mp4 -ss 00:01:00 -to 00:01:30 -c:v libx264 -crf 18 out.mp4'],
+    ['Join identical files','ffmpeg -f concat -safe 0 -i list.txt -c copy out.mp4'],
+    ['Loop a clip 3 times','ffmpeg -stream_loop 2 -i in.mp4 -c copy out.mp4'],
+    ['Reverse clip + audio','ffmpeg -i in.mp4 -vf reverse -af areverse out.mp4'],
+    ['Split every ten minutes','ffmpeg -i in.mp4 -c copy -f segment -segment_time 600 -reset_timestamps 1 part_%03d.mp4'],
+    ['Images to 30fps video','ffmpeg -framerate 30 -i frame_%04d.png -c:v libx264 -pix_fmt yuv420p out.mp4'],
+  ]],
+  ['ffmpeg · streams', [
+    ['Strip subtitles','ffmpeg -i in.mkv -map 0 -c copy -sn out.mkv'],
+    ['Keep only the second audio track','ffmpeg -i in.mkv -map 0:v -map 0:a:1 -c copy out.mkv'],
+    ['Replace audio track','ffmpeg -i vid.mp4 -i new_audio.m4a -map 0:v:0 -map 1:a:0 -c copy -shortest out.mp4'],
+    ['Fix audio sync (+250ms)','ffmpeg -i in.mp4 -itsoffset 0.25 -i in.mp4 -map 0:v -map 1:a -c copy out.mp4'],
+    ['Extract a subtitle track','ffmpeg -i in.mkv -map 0:s:0 subs.srt'],
+    ['Soft-add subtitles to MP4','ffmpeg -i in.mp4 -i subs.srt -c copy -c:s mov_text -metadata:s:s:0 language=eng out.mp4'],
+    ['Burn subtitles in','ffmpeg -i in.mp4 -vf "subtitles=subs.srt:force_style=\'FontSize=24\'" -c:a copy out.mp4'],
+    ['Tag an audio track','ffmpeg -i in.mkv -map 0 -c copy -metadata:s:a:0 language=tur out.mkv'],
+  ]],
+  ['ffmpeg · audio', [
+    ['Broadcast loudness','ffmpeg -i in.wav -af loudnorm=I=-16:TP=-1.5:LRA=11 out.wav'],
+    ['Strip video, keep audio','ffmpeg -i in.mp4 -vn -c:a copy out.m4a'],
+    ['Speed up, keep pitch','ffmpeg -i in.mp3 -af atempo=1.25 out.mp3'],
+    ['Denoise a voice recording','ffmpeg -i in.wav -af "highpass=f=80,afftdn=nr=12,acompressor" out.wav'],
+    ['Mix two tracks','ffmpeg -i a.wav -i b.wav -filter_complex amix=inputs=2:duration=longest out.wav'],
+    ['Detect silence intervals','ffmpeg -i in.mp3 -af silencedetect=noise=-35dB:d=1.0 -f null -'],
+    ['Waveform PNG image','ffmpeg -i in.mp3 -filter_complex "showwavespic=s=1200x240:colors=#ff6b35" -frames:v 1 wave.png'],
+  ]],
+  ['ffmpeg · picture', [
+    ['Resize keeping aspect','ffmpeg -i in.mp4 -vf "scale=-2:720:flags=lanczos" -c:a copy out.mp4'],
+    ['Crop to square','ffmpeg -i in.mp4 -vf "crop=ih:ih" out.mp4'],
+    ['Rotate 90° clockwise','ffmpeg -i in.mp4 -vf transpose=1 -c:a copy out.mp4'],
+    ['Deinterlace','ffmpeg -i in.mkv -vf bwdif -c:a copy out.mkv'],
+    ['High-quality GIF (1-pass)','ffmpeg -ss 5 -t 4 -i in.mp4 -vf "fps=15,scale=520:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" out.gif'],
+    ['Animated WebP','ffmpeg -ss 5 -t 4 -i in.mp4 -vf "fps=15,scale=640:-1:flags=lanczos" -loop 0 -c:v libwebp -q:v 75 out.webp'],
+    ['Picture-in-picture','ffmpeg -i main.mp4 -i cam.mp4 -filter_complex "[1:v]scale=360:-1[pip];[0:v][pip]overlay=W-w-20:H-h-20" -c:a copy out.mp4'],
+    ['Side-by-side stack','ffmpeg -i left.mp4 -i right.mp4 -filter_complex hstack=inputs=2 out.mp4'],
+    ['Contact sheet','ffmpeg -i in.mp4 -vf "fps=1/30,scale=320:-1,tile=5x5" sheet.jpg'],
+  ]],
+  ['ffmpeg · web & timecode', [
+    ['Remux MKV to MP4 fast','ffmpeg -i in.mkv -c copy -movflags +faststart out.mp4'],
+    ['HLS stream segments','ffmpeg -i in.mp4 -c copy -hls_time 6 -hls_playlist_type vod out.m3u8'],
+    ['Burn timecode overlay','ffmpeg -i in.mp4 -vf "drawtext=text=\'%{pts\\:hms}\':x=16:y=16:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6" -c:a copy out.mp4'],
+    ['Stabilize shaky footage','ffmpeg -i in.mp4 -vf vidstabdetect=shakiness=5:accuracy=15 -f null - && ffmpeg -i in.mp4 -vf vidstabtransform=smoothing=30,unsharp=5:5:0.8:3:3:0.4 -c:a copy out.mp4'],
+  ]],
+  ['ffprobe', [
+    ['Everything as JSON','ffprobe -v quiet -print_format json -show_format -show_streams in.mkv'],
+    ['Just the duration','ffprobe -v error -show_entries format=duration -of csv=p=0 in.mkv'],
+    ['Stream summary','ffprobe -v error -show_entries stream=index,codec_type,codec_name -of csv in.mkv'],
+    ['Resolution & bitrate','ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate,bit_rate -of default=noprint_wrappers=1 in.mp4'],
+    ['Chapter list as JSON','ffprobe -v quiet -print_format json -show_chapters in.mkv'],
+    ['Keyframe timestamps','ffprobe -v error -select_streams v:0 -skip_frame nokey -show_entries frame=pkt_pts_time -of csv=p=0 in.mp4'],
+    ['Count frames exactly','ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of csv=p=0 in.mp4'],
+  ]],
+];
+async function loadSnippets(){
+  try{
+    const j = await api('/api/snippets');
+    const q = ($('#refSearch').value||'').toLowerCase();
+    const rows = (j.snippets||[]).filter(s => !q || (s.name+' '+s.command+' '+(s.notes||'')).toLowerCase().includes(q));
+    $('#snippetPanel').innerHTML = `<div class="panel"><div class="panel-head"><h3>Saved Snippets</h3>
+      <div class="spacer"></div><button class="btn sm alt" onclick="saveSnippetPrompt()">+ Save snippet</button></div>
+      <div class="panel-body">${rows.length ? rows.map(s=>`<div class="listrow">
+        <span class="fname" title="${esc(s.command)}"><b>${esc(s.name)}</b> · ${esc(s.command)}</span>
+        <span class="facts">
+          <button class="btn sm" onclick="copyText(${JSON.stringify(s.command)})">Copy</button>
+          <button class="btn sm bad icon" onclick="delSnippet(${s.id})">×</button>
+        </span></div>`).join('') : '<span class="muted">No saved snippets yet.</span>'}</div></div>`;
+  }catch(e){}
+}
+async function saveSnippetPrompt(){
+  const name = prompt('Snippet name'); if(!name) return;
+  const command = prompt('Command'); if(!command) return;
+  await api('/api/snippets',{method:'POST',body:JSON.stringify({name, command})});
+  toast('Snippet saved'); loadSnippets();
