@@ -112,17 +112,12 @@ function selectJob(id){
   openDock();
 }
 function openDock(){ $('#dock').classList.remove('min'); }
-function stepDock(dir){
-  const d = $('#dock');
-  const states = ['min', 'normal', 'max'];
-  const cur = d.classList.contains('min') ? 0 : (d.classList.contains('max') ? 2 : 1);
-  const next = states[(cur + dir + states.length) % states.length];
-  d.classList.remove('min', 'max');
-  if(next !== 'normal') d.classList.add(next);
-}
 function cycleDock(e){
   if(e && e.target.closest('button')) return;
-  stepDock(1);
+  const d = $('#dock');
+  if(d.classList.contains('min')) d.classList.remove('min');
+  else if(d.classList.contains('max')){ d.classList.remove('max'); d.classList.add('min'); }
+  else d.classList.add('max');
 }
 async function cancelCurrent(){ if(currentJob) try{ await api('/api/jobs/'+currentJob+'/cancel',{method:'POST'}); }catch(e){fail(e);} }
 async function retryCurrent(){ if(currentJob) try{ const j = await api('/api/jobs/'+currentJob+'/retry',{method:'POST'}); selectJob(j.job); }catch(e){fail(e);} }
@@ -393,3 +388,239 @@ async function saveSnippetPrompt(){
   const command = prompt('Command'); if(!command) return;
   await api('/api/snippets',{method:'POST',body:JSON.stringify({name, command})});
   toast('Snippet saved'); loadSnippets();
+}
+async function delSnippet(id){
+  await api('/api/snippets?id='+id,{method:'DELETE'});
+  loadSnippets();
+}
+function applyRecipe(cmd){
+  if(cmd.startsWith('yt-dlp ')){
+    if(cmd.includes(' -x')) ytOpts.extract_audio = true;
+    if(cmd.includes('--embed-subs')) ytOpts.embed_subs = true;
+    if(cmd.includes('--embed-thumbnail')) ytOpts.embed_thumbnail = true;
+    if(cmd.includes('--embed-metadata')) ytOpts.embed_metadata = true;
+    if(cmd.includes('--embed-chapters')) ytOpts.embed_chapters = true;
+    if(cmd.includes('--split-chapters')) ytOpts.split_chapters = true;
+    const mFmt = cmd.match(/--merge-output-format\s+(\S+)/); if(mFmt) ytOpts.merge_output_format = mFmt[1];
+    const mAud = cmd.match(/--audio-format\s+(\S+)/); if(mAud) ytOpts.audio_format = mAud[1];
+    show('fetch'); renderYtOptions(); renderActiveStrip(); syncFetch();
+    toast('Applied recipe options to Fetch');
+  } else if(cmd.startsWith('ffmpeg ')){
+    lab.op = 'transcode';
+    const mVc = cmd.match(/-c:v\s+(\S+)/); if(mVc) lab.enc.vcodec = mVc[1];
+    const mAc = cmd.match(/-c:a\s+(\S+)/); if(mAc) lab.enc.acodec = mAc[1];
+    const mCrf = cmd.match(/-crf\s+(\d+)/); if(mCrf) lab.enc.crf = mCrf[1];
+    const mPre = cmd.match(/-preset\s+(\S+)/); if(mPre) lab.enc.preset = mPre[1];
+    show('lab'); renderLab();
+    toast('Applied recipe options to Media Lab');
+  } else {
+    copyText(cmd);
+  }
+}
+
+function renderReference(){
+  loadSnippets();
+  const q = ($('#refSearch').value||'').toLowerCase();
+  $('#refGrid').innerHTML = `<div class="cols-3">` + RECIPES.map(([title, items])=>{
+    const hit = items.filter(([n,c])=>!q || n.toLowerCase().includes(q) || c.toLowerCase().includes(q));
+    if(!hit.length) return '';
+    return `<div class="panel"><div class="panel-head"><h3>${esc(title)}</h3></div>
+      <div class="panel-body">${hit.map(([n,c])=>`
+        <div style="margin-bottom:9px">
+          <div class="inline" style="justify-content:space-between;margin-bottom:3px">
+            <span class="lbl" style="margin:0;text-transform:none;letter-spacing:0;font-family:var(--sans);font-size:.73rem;color:var(--ink-dim)">${esc(n)}</span>
+            ${(c.startsWith('yt-dlp ') || c.startsWith('ffmpeg ')) ? `<button class="btn sm" onclick="applyRecipe(${JSON.stringify(c)})">Apply to UI</button>` : ''}
+          </div>
+          <div class="readout" style="font-size:.68rem;cursor:pointer" data-act="copyEl">${esc(c)}</div>
+        </div>`).join('')}</div></div>`;
+  }).join('') + `</div>`;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   COMMAND PALETTE
+   ══════════════════════════════════════════════════════════════════════ */
+let palItems = [], palIdx = 0;
+function buildPalette(){
+  palItems = [];
+  const seenViews = new Set();
+  $$('.nav').forEach(n => {
+    const v = n.dataset.view;
+    if(!v || seenViews.has(v)) return;
+    seenViews.add(v);
+    const clone = n.cloneNode(true);
+    $$('.ic, .count, .tool', clone).forEach(el => el.remove());
+    const label = clone.textContent.trim();
+    palItems.push({label: 'Go to ' + label, where: 'view', run: () => show(v)});
+  });
+  BOOT.ff_ops.forEach(o=>palItems.push({label:o.label, where:'operation',
+    run:()=>{ pickOp(o.id); show('lab'); }}));
+  BOOT.filters.forEach(f=>palItems.push({label:'Add filter · '+f.label, where:f.kind,
+    run:()=>{ addFilter(f.kind, f.id); show('filters'); }}));
+  BOOT.ytdlp_options.filter(o=>!o.hidden).forEach(o=>palItems.push({label:'Option · '+o.label, where:'yt-dlp',
+    run:()=>{ show('fetch'); optGroup = o.group; $('#optSearch').value = '';
+      $('#showAdv').checked = $('#showAdv').checked || !!o.adv; renderYtOptions();
+      setTimeout(()=>{ const e = $('#yt_'+o.id); if(e){ e.focus(); e.scrollIntoView({block:'center'}); } },60); }}));
+  [['Start download',()=>runFetch()],['Cancel every running job',cancelAll],
+   ['Clear finished jobs',clearJobs],['Check tool versions',showDeps],
+   ['Update yt-dlp',updateYtdlp],['Switch theme',toggleTheme],
+   ['Clear the filter chain',clearFilters],['Reset download options',resetYtOptions],
+   ['Scroll to top',()=>jumpTo('top')],
+   ['Scroll to bottom',()=>jumpTo('bottom')]]
+    .forEach(([label,run])=>palItems.push({label, where:'action', run}));
+}
+function openPalette(){
+  $('#palScrim').hidden = false; $('#palInput').value = ''; palIdx = 0;
+  renderPalette(); $('#palInput').focus();
+}
+function closePalette(){ $('#palScrim').hidden = true; }
+function palMatches(){
+  const q = $('#palInput').value.toLowerCase().trim();
+  const hits = palItems.filter(i=>!q || i.label.toLowerCase().includes(q));
+  return hits.slice(0, 60);
+}
+function renderPalette(){
+  const hits = palMatches();
+  if(palIdx >= hits.length) palIdx = Math.max(0, hits.length-1);
+  $('#palList').innerHTML = hits.map((i,n)=>
+    `<div class="pal-item ${n===palIdx?'on':''}" data-act="palRun" data-i="${n}">
+      <span>${esc(i.label)}</span><span class="where">${esc(i.where)}</span></div>`).join('')
+    || `<div class="empty">Nothing matches that.</div>`;
+}
+function runPal(n){ const h = palMatches(); if(h[n]){ closePalette(); h[n].run(); focusWork(); } }
+$('#palInput').addEventListener('input', ()=>{ palIdx=0; renderPalette(); });
+$('#palInput').addEventListener('keydown', e=>{
+  const h = palMatches();
+  if(e.key==='ArrowDown'){ palIdx=Math.min(palIdx+1,h.length-1); renderPalette(); e.preventDefault(); }
+  if(e.key==='ArrowUp'){ palIdx=Math.max(palIdx-1,0); renderPalette(); e.preventDefault(); }
+  if(e.key==='Enter'){ runPal(palIdx); }
+  if(e.key==='Escape'){ closePalette(); }
+});
+
+function inTextField(el){
+  return !!(el && el.closest && el.closest('input, textarea, select, [contenteditable]'));
+}
+
+document.addEventListener('keydown', e=>{
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='k'){ e.preventDefault(); openPalette(); }
+  else if(e.key==='Escape'){ closeModal(); closePalette(); }
+  else if((e.ctrlKey||e.metaKey) && e.key==='Enter'){
+    e.preventDefault();
+    if($('#view-fetch').classList.contains('on')) runFetch();
+    else if($('#view-lab').classList.contains('on')) runLab();
+    else if($('#view-pipeline').classList.contains('on')) runPipeline();
+  }
+  else if(e.key==='`' && (e.ctrlKey||e.metaKey)){ e.preventDefault(); cycleDock(); }
+  else if((e.ctrlKey||e.metaKey) && (e.key==='ArrowUp' || e.key==='ArrowDown')){
+    e.preventDefault(); jumpTo(e.key === 'ArrowUp' ? 'top' : 'bottom');
+  }
+  else if((e.key==='Home' || e.key==='End') && !inTextField(e.target)){
+    e.preventDefault(); jumpTo(e.key === 'Home' ? 'top' : 'bottom');
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════════
+   PERSISTENCE OF UI STATE
+   ══════════════════════════════════════════════════════════════════════ */
+function saveLocal(){
+  try{
+    localStorage.setItem('tf_state', JSON.stringify({
+      ytOpts, chains, lab:{op:lab.op,params:lab.params,enc:lab.enc,output:lab.output,inputs:lab.inputs,output_mode:lab.output_mode},
+      urls:$('#dlUrls')?$('#dlUrls').value:'',
+      dlSplit:$('#dlSplit')?$('#dlSplit').checked:false,
+      seek:{ss:$('#seekSS')?.value||'', to:$('#seekTo')?.value||'', t:$('#seekT')?.value||'', accurate:!!$('#seekAcc')?.checked},
+      ff:{hw:$('#ffHw')?.value||'', log:$('#ffLog')?.value||'info', pre:$('#ffPre')?.value||'', overwrite:!!$('#ffOverwrite')?.checked},
+      pipe:{in:$('#pipeIn')?.value||'', out:$('#pipeOut')?.value||''},
+      batch:{pattern:$('#batchPattern')?.value||'', dir:$('#batchDir')?.value||''},
+      pipeSteps, batchFiles
+    }));
+  }catch(e){}
+}
+function restoreLocal(){
+  try{
+    const s = JSON.parse(localStorage.getItem('tf_state')||'{}');
+    if(s.ytOpts) ytOpts = s.ytOpts;
+    if(s.chains) chains = s.chains;
+    if(s.lab) lab = Object.assign(lab, {output_mode:s.lab.output?'manual':'auto'}, s.lab);
+    if(s.pipeSteps) pipeSteps = s.pipeSteps;
+    if(s.batchFiles) batchFiles = s.batchFiles;
+    if(s.urls && $('#dlUrls')) $('#dlUrls').value = s.urls;
+    if(s.dlSplit != null && $('#dlSplit')) $('#dlSplit').checked = !!s.dlSplit;
+    if(s.seek){
+      if($('#seekSS')) $('#seekSS').value = s.seek.ss || '';
+      if($('#seekTo')) $('#seekTo').value = s.seek.to || '';
+      if($('#seekT')) $('#seekT').value = s.seek.t || '';
+      if($('#seekAcc')) $('#seekAcc').checked = !!s.seek.accurate;
+    }
+    if(s.ff){
+      if($('#ffHw')) $('#ffHw').value = s.ff.hw || '';
+      if($('#ffLog')) $('#ffLog').value = s.ff.log || 'info';
+      if($('#ffPre')) $('#ffPre').value = s.ff.pre || '';
+      if($('#ffOverwrite')) $('#ffOverwrite').checked = !!s.ff.overwrite;
+    }
+    if(s.pipe){
+      if($('#pipeIn')) $('#pipeIn').value = s.pipe.in || '';
+      if($('#pipeOut')) $('#pipeOut').value = s.pipe.out || '';
+    }
+    if(s.batch){
+      if($('#batchPattern') && s.batch.pattern) $('#batchPattern').value = s.batch.pattern;
+      if($('#batchDir')) $('#batchDir').value = s.batch.dir || '';
+    }
+    const th = localStorage.getItem('tf_theme'); if(th) document.documentElement.dataset.theme = th;
+    const ac = localStorage.getItem('tf_accent'); if(ac) setAccent(ac);
+    const fs = localStorage.getItem('tf_fs'); if(fs){ $('#cfgFont').value = fs; applyFontScale(fs); }
+    else applyFontScale(100);
+  }catch(e){}
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   BOOT
+   ══════════════════════════════════════════════════════════════════════ */
+async function boot(){
+  BOOT = await api('/api/bootstrap');
+  restoreLocal();
+
+  renderFormatChips();
+  $('#tplChips').innerHTML = BOOT.output_presets.map((p,i)=>
+    `<button class="chip mono" title="${esc(p.value)}" data-act="tplPreset" data-i="${i}">${esc(p.label)}</button>`).join('');
+  $('#tokenChips').innerHTML = BOOT.output_tokens.map(t=>
+    `<button class="chip mono" title="${esc(t.desc)}" data-act="insToken" data-t="${esc(t.token)}">%(${esc(t.token)})s</button>`).join('');
+  $('#ffHw').innerHTML = BOOT.hwaccels.map(h=>
+    `<option value="${h}">${h===''?'— none —':h}</option>`).join('');
+
+  $('#labOut').value = lab.output || '';
+  $('#pathChip').onclick = ()=>{ libState.dir=''; show('library'); };
+
+  renderKindChips(); renderYtOptions(); renderActiveStrip(); renderTplSummary();
+  renderLab(); renderChains();
+  renderPipeline(); renderBatch(); renderReference(); fillSettings(); buildPalette();
+  connectJobs(); loadDisk(); syncFetch();
+
+  $('#dlUrls').addEventListener('input', syncFetch);
+  $('#railToggle').onclick = ()=>$('#rail').classList.toggle('open');
+  if(window.innerWidth < 900) $('#railToggle').style.display = '';
+
+  watchScroll(); wireJumpRail(); focusWork();
+  $('#work').classList.add('snap');
+  const h = location.hash.replace('#',''); if(h) show(h);
+  window.addEventListener('beforeunload', saveLocal);
+}
+
+function insertToken(tok){
+  const cur = ytOpts.output || BOOT.config.default_output_template || '';
+  setOpt('output', cur.replace(/(\.%\(ext\)s)?$/, '') + `%(${tok})s` +
+    (cur.includes('%(ext)s') ? '.%(ext)s' : ''));
+  renderYtOptions();
+}
+
+boot().catch(e=>{
+  console.error('boot failed', e);
+  document.body.innerHTML = `<div style="padding:36px;font-family:ui-monospace,monospace;
+      color:#ff8b96;line-height:1.6;max-width:70ch">
+    <b style="font-size:1.1rem;color:#dfe3e8">TubeForge could not start</b>
+    <p style="margin-top:10px">${esc(e.message)}</p>
+    <p style="margin-top:10px;color:#98a1ad">The server is running — this is a problem in the page
+      itself. The browser console has the full trace. Try a hard refresh
+      (Ctrl+Shift+R) in case an old script is cached.</p>
+    <pre style="margin-top:14px;color:#6d7682;font-size:.8rem;white-space:pre-wrap">${
+      esc((e.stack||'').split('\n').slice(0,6).join('\n'))}</pre></div>`;
+});
