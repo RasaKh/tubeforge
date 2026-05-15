@@ -513,7 +513,7 @@ def build_ytdlp(spec):
     if invalid:
         raise ValueError("Only http:// and https:// media URLs are allowed.")
 
-    cmd = [CONFIG["ytdlp_bin"]]
+    cmd = [CONFIG["ytdlp_bin"], "--ignore-config"]
 
     # Structured progress output so the UI can draw real progress bars.
     if spec.get("progress", True):
