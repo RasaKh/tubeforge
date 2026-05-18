@@ -1054,7 +1054,7 @@ def build_ffmpeg(spec):
             scodec = params.get("scodec") or "auto"
             if scodec == "auto":
                 scodec = "mov_text" if os.path.splitext(o)[1].lower() in (".mp4", ".m4v", ".mov") else "srt"
-            cmd += ["-i", inputs[0], "-i", inputs[1], "-map", "0", "-map", "1",
+            cmd += ["-i", inputs[0], "-i", inputs[1], "-map", "0", "-map", "1:s:0",
                     "-c", "copy", "-c:s", scodec,
                     "-metadata:s:s:%d" % existing_subs, "language=%s" % (params.get("lang") or "eng")]
             if params.get("title"):
