@@ -342,7 +342,7 @@ def compile_filter(entry):
             continue
         raw = _validate_filter_file(spec["id"], p["id"], raw)
         val = _esc_filter_value(raw)
-        if spec["id"] == "pan":
+        if p.get("pos") and allow_pos and not named:
             positional.append(val)
         else:
             allow_pos = False
