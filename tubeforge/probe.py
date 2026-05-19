@@ -47,7 +47,7 @@ ALLOWED_BINARIES = {"yt-dlp", "ffmpeg", "ffprobe", "aria2c", "AtomicParsley", "y
 #  MEDIA PROBING
 # ═══════════════════════════════════════════════════════════════════════════
 
-_probe_cache = {}
+_probe_cache = collections.OrderedDict()
 _probe_lock = threading.Lock()
 
 
