@@ -73,7 +73,7 @@ def check_request_origin():
         origin = request.headers.get("Origin")
         if origin and (origin == "null" or urlsplit(origin).netloc != request.host):
             return jerr("Cross-origin state changes are not permitted.", 403)
-        if request.data and not request.is_json:
+        if request.mimetype != "application/json":
             return jerr("Use application/json for API requests.", 415)
     if auth_required() and request.path.startswith("/api/") and request.path != "/api/auth/login" and not request_is_authorized():
         return jerr("Authentication required.", 401)
