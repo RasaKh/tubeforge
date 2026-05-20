@@ -41,7 +41,7 @@ DEFAULT_CONFIG = {
     "notify_on_finish": True,
     "auth_enabled": False,
     "auth_token_hash": "",
-    "auth_cookie_secure": True,
+    "auth_cookie_secure": "auto",  # "auto" | True | False
     "allow_raw_ffmpeg": False,
 }
 

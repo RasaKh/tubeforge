@@ -81,7 +81,7 @@ def api_auth_login():
     is_secure = (
         request.is_secure
         or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
-        if False
+        if cookie_secure_cfg == "auto"
         else bool(cookie_secure_cfg)
     )
     response.set_cookie(
