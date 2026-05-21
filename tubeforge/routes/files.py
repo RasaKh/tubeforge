@@ -210,6 +210,114 @@ def api_file_mkdir():
     return jsonify({"ok": True, "path": p})
 
 
+@bp.route("/api/browse", methods=["POST"])
+def api_browse():
+    data = body()
+    mode = data.get("mode") or "file"
+    if mode not in ("file", "files", "dir", "save"):
+        return jerr("Invalid browse mode.")
+    title = str(data.get("title") or "Select")[:120]
+    initial = (data.get("initial") or "").strip()
+    start_dir = dl_dir()
+    if initial:
+        expanded = os.path.expanduser(initial)
+        if os.path.isdir(expanded):
+            start_dir = expanded
+        elif os.path.isdir(os.path.dirname(expanded)):
+            start_dir = os.path.dirname(expanded)
+
+    def _in_sandbox(p):
+        real = os.path.realpath(p)
+        return any(real == r or real.startswith(r + os.sep) for r in allowed_roots())
+
+    def _result(paths):
+        paths = [os.path.abspath(p) for p in paths if p and p.strip()]
+        if not paths:
+            return jsonify({"ok": True, "cancelled": True})
+        first = paths[0]
+        outside = (mode != "dir") and CONFIG.get("sandbox_paths", True) and not _in_sandbox(first)
+        return jsonify({
+            "ok": True,
+            "path": first,
+            "paths": paths,
+            "outside_sandbox": outside,
+            "parent": os.path.dirname(first),
+        })
+
+    # Linux desktop: zenity -> kdialog -> tkinter
+    if sys.platform.startswith("linux"):
+        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            return jsonify({"ok": False, "headless": True})
+        zen = shutil.which("zenity")
+        if zen:
+            cmd = [zen, "--file-selection", "--title", title, "--filename", start_dir.rstrip("/") + "/"]
+            if mode == "files":
+                cmd += ["--multiple", "--separator=\n"]
+            elif mode == "dir":
+                cmd += ["--directory"]
+            elif mode == "save":
+                cmd += ["--save", "--confirm-overwrite"]
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                if res.returncode == 0:
+                    return _result(res.stdout.strip().splitlines())
+                return jsonify({"ok": True, "cancelled": True})
+            except Exception:
+                pass
+        kd = shutil.which("kdialog")
+        if kd:
+            flag = {"file": "--getopenfilename", "files": "--getopenfilename",
+                    "dir": "--getexistingdirectory", "save": "--getsavefilename"}[mode]
+            cmd = [kd, flag, start_dir, "--title", title]
+            if mode == "files":
+                cmd += ["--multiple", "--separate-output"]
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+                if res.returncode == 0:
+                    return _result(res.stdout.strip().splitlines())
+                return jsonify({"ok": True, "cancelled": True})
+            except Exception:
+                pass
+
+    # macOS native osascript
+    if sys.platform == "darwin":
+        if mode == "dir":
+            script = f'POSIX path of (choose folder with prompt {json.dumps(title)} default location POSIX file {json.dumps(start_dir)})'
+        elif mode == "save":
+            script = f'POSIX path of (choose file name with prompt {json.dumps(title)} default location POSIX file {json.dumps(start_dir)})'
+        elif mode == "files":
+            script = f'set fs to (choose file with prompt {json.dumps(title)} default location POSIX file {json.dumps(start_dir)} with multiple selections allowed)\nset out to ""\nrepeat with f in fs\nset out to out & POSIX path of f & linefeed\nend repeat\nout'
+        else:
+            script = f'POSIX path of (choose file with prompt {json.dumps(title)} default location POSIX file {json.dumps(start_dir)})'
+        try:
+            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=180)
+            if res.returncode == 0:
+                return _result(res.stdout.strip().splitlines())
+            return jsonify({"ok": True, "cancelled": True})
+        except Exception:
+            return jsonify({"ok": False, "headless": True})
+
+    # Fallback: tkinter.filedialog in a subprocess (works on Windows and Linux with python3-tk)
+    tk_script = (
+        "import json, sys, tkinter as tk; from tkinter import filedialog as fd; "
+        "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True); "
+        "mode, start, title = sys.argv[1], sys.argv[2], sys.argv[3]; "
+        "res = (fd.askdirectory(initialdir=start, title=title) if mode=='dir' "
+        "else fd.asksaveasfilename(initialdir=start, title=title) if mode=='save' "
+        "else list(fd.askopenfilenames(initialdir=start, title=title)) if mode=='files' "
+        "else fd.askopenfilename(initialdir=start, title=title)); "
+        "print(json.dumps(res if isinstance(res, list) else ([res] if res else [])))"
+    )
+    try:
+        res = subprocess.run([sys.executable, "-c", tk_script, mode, start_dir, title],
+                             capture_output=True, text=True, timeout=180)
+        if res.returncode == 0 and res.stdout.strip():
+            return _result(json.loads(res.stdout.strip()))
+    except Exception:
+        pass
+    return jsonify({"ok": False, "headless": True})
+
+
 @bp.route("/api/files/read")
 def api_file_read():
     try:
