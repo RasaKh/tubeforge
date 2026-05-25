@@ -605,7 +605,8 @@
       <div class="spacer"></div>
       <button class="btn sm" onclick="event.stopPropagation();cancelAll()">Cancel running</button>
       <button class="btn sm" onclick="event.stopPropagation();clearJobs()">Clear finished</button>
-      <button class="btn sm icon" type="button" title="Expand / step up" aria-label="Expand transport dock" id="dockChev">▾</span>
+      <button class="btn sm icon" type="button" title="Expand / step up" aria-label="Expand transport dock" onclick="event.stopPropagation();stepDock(1)">▴</button>
+      <button class="btn sm icon" type="button" title="Collapse / step down" aria-label="Collapse transport dock" onclick="event.stopPropagation();stepDock(-1)">▾</button>
     </div>
     <div class="dock-body">
       <div class="job-list" id="dockJobs"><div class="empty"><b>Nothing queued</b>Jobs you start appear here with live output.</div></div>

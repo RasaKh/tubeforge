@@ -112,12 +112,17 @@ function selectJob(id){
   openDock();
 }
 function openDock(){ $('#dock').classList.remove('min'); }
+function stepDock(dir){
+  const d = $('#dock');
+  const states = ['min', 'normal', 'max'];
+  const cur = d.classList.contains('min') ? 0 : (d.classList.contains('max') ? 2 : 1);
+  const next = states[(cur + dir + states.length) % states.length];
+  d.classList.remove('min', 'max');
+  if(next !== 'normal') d.classList.add(next);
+}
 function cycleDock(e){
   if(e && e.target.closest('button')) return;
-  const d = $('#dock');
-  if(d.classList.contains('min')) d.classList.remove('min');
-  else if(d.classList.contains('max')){ d.classList.remove('max'); d.classList.add('min'); }
-  else d.classList.add('max');
+  stepDock(1);
 }
 async function cancelCurrent(){ if(currentJob) try{ await api('/api/jobs/'+currentJob+'/cancel',{method:'POST'}); }catch(e){fail(e);} }
 async function retryCurrent(){ if(currentJob) try{ const j = await api('/api/jobs/'+currentJob+'/retry',{method:'POST'}); selectJob(j.job); }catch(e){fail(e);} }
