@@ -1,26 +1,44 @@
-MIT-Style Non-Commercial License (TubeForge)
+MIT-Style Non-Commercial License (khosrofar.me)
 
 Copyright (c) 2026 Rasa Khosrofar
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software for non-commercial purposes without restriction, including
-without limitation the rights to use, copy, modify, merge, publish, and
-distribute copies of the Software, subject to the following conditions:
+of this software, source code, shaders, visual or audio assets, UI/design
+elements, and associated content or documentation files (collectively, the
+"Software"), to deal in the Software for non-commercial purposes without
+restriction, including without limitation the rights to use, copy, modify,
+merge, publish, and distribute copies of the Software, subject to the
+following express conditions:
 
 1. Non-Commercial Use Only:
-   Any commercial use of the Software or derivative works thereof is strictly
-   prohibited without prior explicit written consent or a separate commercial
-   license from the copyright holder. "Commercial use" includes any direct or
-   indirect monetization or business advantage, including but not limited to:
-   selling, licensing for a fee, paid tiers or subscriptions, advertisements,
-   sponsorships, monetized data collection, bundling into a commercial product
-   or service, or operating the Software by or on behalf of a for-profit
-   entity or commercial workflow.
+   Any commercial use of the Software, derivative works thereof, or outputs
+   generated thereby is strictly prohibited without prior explicit written
+   consent or a separate commercial license from the copyright holder.
+   "Commercial use" includes any direct or indirect monetization or business
+   advantage, including but not limited to: selling; licensing for a fee;
+   paid tiers or subscriptions; advertisements or sponsorships; monetized
+   data collection; bundling into a commercial product or service; providing
+   paid hosting, managed services (SaaS/API), installation, consulting, or
+   support centered on the Software; selling or commercially exploiting
+   outputs produced by the Software; using the Software (including via an
+   academic or non-profit entity) for work commissioned by, funded by, or
+   transferred to a for-profit entity; operating the Software by or on behalf
+   of a for-profit entity or commercial workflow; or using the Software to
+   train, fine-tune, or evaluate commercial or proprietary AI/machine
+   learning models.
 
-2. Notice Preservation:
+2. Notice Preservation & Derivative Works:
    The above copyright notice and this permission notice shall be included in
-   all copies or substantial portions of the Software.
+   all copies or substantial portions of the Software. Any distributed
+   modifications, merges, or derivative works must be licensed as a whole
+   under the exact terms of this License, and the name of the copyright
+   holder or original project may not be used to endorse or promote
+   derivative works without prior written permission.
+
+3. Automatic Termination:
+   Compliance with the above conditions is an express condition precedent to
+   the grant of this License. Any failure to comply automatically and
+   immediately terminates all rights granted hereunder without notice.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
